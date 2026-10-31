@@ -130,7 +130,43 @@ async function initDatabase() {
       );
     `);
 
-    console.log('✅ All database tables including pgvector RAG tables initialized successfully in Neon PostgreSQL!');
+    // 9. Institutional Users & Roles Table (Multi-tenant Bank Governance)
+    await query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id VARCHAR(100) PRIMARY KEY,
+        name VARCHAR(255) NOT NULL,
+        email VARCHAR(255) UNIQUE NOT NULL,
+        role VARCHAR(100) NOT NULL,          -- 'Bank Owner', 'Bank Employee', 'Platform Owner'
+        role_type VARCHAR(50) NOT NULL,      -- 'manager', 'employee', 'admin'
+        department VARCHAR(255),
+        avatar VARCHAR(10),
+        bank_id VARCHAR(50) DEFAULT 'cba',   -- 'cba', 'nab', 'wbc', 'anz'
+        is_active BOOLEAN DEFAULT TRUE,
+        created_by VARCHAR(100) DEFAULT 'System Administrator',
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    // 10. Dynamic Policy Starter Templates Table
+    await query(`
+      CREATE TABLE IF NOT EXISTS policy_templates (
+        id VARCHAR(100) PRIMARY KEY,
+        name VARCHAR(255) NOT NULL,
+        title VARCHAR(255) NOT NULL,
+        department_id VARCHAR(100) REFERENCES departments(id) ON DELETE SET NULL,
+        summary TEXT,
+        sla VARCHAR(50) DEFAULT '4 Hours',
+        daily_limit VARCHAR(50) DEFAULT '$25,000 AUD',
+        officer_cap VARCHAR(50) DEFAULT '$100,000 AUD',
+        sections JSONB DEFAULT '[]'::jsonb,
+        phases JSONB DEFAULT '[]'::jsonb,
+        is_active BOOLEAN DEFAULT TRUE,
+        created_by VARCHAR(100) DEFAULT 'System Administrator',
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    console.log('✅ All 10 database tables including users, dynamic templates & pgvector RAG initialized successfully in Neon PostgreSQL!');
   } catch (err) {
     console.error('❌ Error initializing database:', err);
     throw err;
