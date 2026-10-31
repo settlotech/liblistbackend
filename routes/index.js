@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 
+const authRouter = require('./auth.routes');
 const departmentsRouter = require('./departments');
 const policiesRouter = require('./policies');
 const makerCheckerRouter = require('./makerChecker');
@@ -13,6 +14,7 @@ const aiRouter = require('./ai');
 const vectorsRouter = require('./vectors');
 
 // Mount all modular routes under /api
+router.use('/auth', authRouter);
 router.use('/', departmentsRouter);
 router.use('/', policiesRouter);
 router.use('/', makerCheckerRouter);
@@ -31,6 +33,7 @@ router.get('/', (req, res) => {
     system: 'LibTrak OmniSpec Hub — Australian Banking Multi-Tenant API',
     version: '2.1.0',
     modules: [
+      'auth',
       'departments',
       'policies',
       'maker-checker',
@@ -38,6 +41,7 @@ router.get('/', (req, res) => {
       'dashboard-metrics',
       'users',
       'templates',
+      'tasks',
       'ai-ingest',
       'ai-rag',
       'vectors'

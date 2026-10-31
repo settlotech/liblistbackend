@@ -1,5 +1,6 @@
 const express = require('express');
 const cors = require('cors');
+const cookieParser = require('cookie-parser');
 const path = require('path');
 require('dotenv').config({ path: path.resolve(__dirname, '.env') });
 
@@ -12,7 +13,13 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 
 // Security & Body Parsers
-app.use(cors());
+app.use(cors({
+  origin: true,
+  credentials: true,
+  methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
+app.use(cookieParser());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
@@ -23,12 +30,14 @@ app.use(requestLogger);
 app.get('/', (req, res) => {
   res.json({
     message: 'LibTrak OmniSpec Hub API',
-    version: '2.1.0',
+    version: '2.2.0',
     documentation: '/api',
     endpoints: {
+      auth: '/api/auth',
       hierarchy: '/api/hierarchy',
       policies: '/api/policies',
       maker_checker: '/api/maker-checker',
+      tasks: '/api/tasks',
       change_logs: '/api/change-logs',
       metrics: '/api/dashboard-metrics',
       users: '/api/users',
@@ -61,6 +70,7 @@ if (process.env.VERCEL !== '1' && !process.env.VERCEL) {
   app.listen(PORT, () => {
     console.log(`🚀 LibTrak Modular Backend running on port ${PORT}`);
     console.log(`📡 API available at http://localhost:${PORT}/api`);
+    console.log(`🔐 Auth API available at http://localhost:${PORT}/api/auth`);
     console.log(`🌐 3D Projector Viewer at http://localhost:${PORT}/3dviewer`);
   });
 }
