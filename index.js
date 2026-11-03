@@ -6,8 +6,6 @@ const cookieParser = require('cookie-parser');
 const morgan = require("morgan");
 const pool = require('./config/db');
 
-
-
 const app = express();
 app.disable('x-powered-by');
 
@@ -18,10 +16,9 @@ app.use(helmet());
 app.use(cors({
     origin: process.env.CLIENT_URL,
     credentials: true,
-    methods: ['GET', 'POST', 'PATCH', 'DELETE'],
+    methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE'],
     allowedHeaders: ['Content-Type', 'Authorization']
 }));
-
 
 // Body parser
 app.use(express.json({ limit: '10kb' }));
@@ -35,30 +32,31 @@ app.use(express.urlencoded({
 app.use(cookieParser());
 
 app.use(morgan("dev"));
-const authRoutes = require('./routes/auth.routes');
 const { notFound, errorHandler } = require('./middleware/error.middleware');
 const initDatabase = require('./database/initDatabase');
 
+const authRoutes = require('./routes/auth.routes');
+const roleRoutes = require('./routes/role.route');
+const userRoutes = require('./routes/user.route');
+const settingRoutes = require('./routes/setting.route');
+
 // Health check
-app.get('/api/health', (req, res) => {
+app.get('/api', (req, res) => {
     res.status(200).json({
         success: true,
         message: 'Server is running'
     });
 });
 
-
-
-// Authentication routes
+// API routes
 app.use('/api/auth', authRoutes);
-
+app.use('/api/roles', roleRoutes);
+app.use('/api/users', userRoutes);
+app.use('/api/settings', settingRoutes);
 
 // Start server only after database connection
 const startServer = async () => {
-
     try {
-        // await pool.query('SELECT 1');
-        // console.log('PostgreSQL Connected Successfully');
         await initDatabase();
         const PORT = process.env.PORT || 5000;
         app.listen(PORT, () => {
@@ -72,9 +70,7 @@ const startServer = async () => {
 
         process.exit(1);
     }
-
 };
-
 
 // Not found
 app.use(notFound);

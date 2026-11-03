@@ -1,19 +1,17 @@
 const AuthService = require('../services/auth.service');
 const User = require('../models/user.model');
 const AppError = require('../utils/appError');
-const {setRefreshCookie,clearRefreshCookie} = require('../utils/cookies');
+const { setRefreshCookie, clearRefreshCookie } = require('../utils/cookies');
 
 // REGISTER
 const register = async (req, res, next) => {
     try {
-
-        const user = await AuthService.register(req.body); 
+        const user = await AuthService.register(req.body);  
         res.status(201).json({
             success: true,
             message: 'Registration successful',
-            data: {...user}
+            data: { ...user }
         });
-
     } catch (error) {
         next(error);
     }
@@ -21,10 +19,10 @@ const register = async (req, res, next) => {
 
 // LOGIN
 const login = async (req, res, next) => {
-
-    try {
-
+    try { 
+        console.log("req.body ==> ", req.body);
         const result = await AuthService.login(req.body);  
+        console.log("result ==> ", result);
         setRefreshCookie(res, result.refreshToken); 
         res.status(200).json({
             success: true,
@@ -34,7 +32,6 @@ const login = async (req, res, next) => {
                 accessToken: result.accessToken
             }
         });
-
     } catch (error) {
         next(error);
     }
@@ -42,10 +39,8 @@ const login = async (req, res, next) => {
 
 // REFRESH
 const refresh = async (req, res, next) => {
-
     try { 
         const token = req.cookies.refreshToken;
-
         if (!token) {
             throw new AppError('Refresh token required', 401);
         }
@@ -61,7 +56,6 @@ const refresh = async (req, res, next) => {
                 accessToken: result.accessToken
             }
         });
-
     } catch (error) {
         next(error);
     }
@@ -69,7 +63,6 @@ const refresh = async (req, res, next) => {
 
 // LOGOUT
 const logout = async (req, res, next) => {
-
     try { 
         await AuthService.logout(req.cookies.refreshToken); 
         clearRefreshCookie(res); 
@@ -77,7 +70,6 @@ const logout = async (req, res, next) => {
             success: true,
             message: 'Logout successful'
         });
-
     } catch (error) {
         next(error);
     }
@@ -85,7 +77,6 @@ const logout = async (req, res, next) => {
 
 // LOGOUT ALL DEVICES
 const logoutAll = async (req, res, next) => {
-
     try { 
         await AuthService.logoutAll(req.user.id); 
         clearRefreshCookie(res); 
@@ -93,7 +84,6 @@ const logoutAll = async (req, res, next) => {
             success: true,
             message: 'Logged out from all devices'
         });
-
     } catch (error) {
         next(error);
     }
@@ -101,7 +91,6 @@ const logoutAll = async (req, res, next) => {
 
 // PROFILE
 const profile = async (req, res, next) => {
-
     try {  
         res.status(200).json({
             success: true,
@@ -110,11 +99,13 @@ const profile = async (req, res, next) => {
                     id: req.user.id,
                     name: req.user.name,
                     email: req.user.email,
-                    role: req.user.role
+                    role: req.user.role,
+                    roles: req.user.roles || [],
+                    permissions: req.user.permissionStrings || [],
+                    isSuperAdmin: Boolean(req.user.isSuperAdmin)
                 }
             }
         });
-
     } catch (error) {
         next(error);
     }
@@ -122,9 +113,7 @@ const profile = async (req, res, next) => {
 
 // UPDATE PROFILE
 const updateProfile = async (req, res, next) => {
-
     try {
-
         const user = await User.updateProfile(
             req.user.id,
             req.body.name
@@ -135,7 +124,6 @@ const updateProfile = async (req, res, next) => {
             message: 'Profile updated successfully',
             data: { user }
         });
-
     } catch (error) {
         next(error);
     }
@@ -143,14 +131,8 @@ const updateProfile = async (req, res, next) => {
 
 // CHANGE PASSWORD
 const changePassword = async (req, res, next) => {
-
     try {
-
-        const {
-            currentPassword,
-            newPassword
-        } = req.body;
-
+        const { currentPassword, newPassword } = req.body;
         await AuthService.changePassword(
             req.user.id,
             currentPassword,
@@ -163,7 +145,6 @@ const changePassword = async (req, res, next) => {
             success: true,
             message: 'Password changed. Please login again.'
         });
-
     } catch (error) {
         next(error);
     }

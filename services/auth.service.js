@@ -2,7 +2,7 @@ const bcrypt = require('bcrypt');
 const crypto = require('crypto');
 const pool = require('../config/db');
 const AppError = require('../utils/appError');
-const {generateAccessToken,generateRefreshToken,hashRefreshToken} = require('../utils/jwt');
+const { generateAccessToken, generateRefreshToken, hashRefreshToken } = require('../utils/jwt');
 
 // Import Models
 const User = require('../models/user.model');
@@ -15,7 +15,10 @@ const publicUser = (user) => ({
     id: user.id,
     name: user.name,
     email: user.email,
-    role: user.role
+    roles: user.roles || [],
+    role: user.role || (user.roles && user.roles[0]?.role_name) || 'User',
+    permissions: user.permissionStrings || [],
+    isSuperAdmin: Boolean(user.isSuperAdmin)
 });
 
 // REGISTER
@@ -24,14 +27,35 @@ const register = async ({ name, email, password }) => {
     if (existingUser) {
         throw new AppError('Email already registered', 409);
     }
-    const hashedPassword = await bcrypt.hash(password,BCRYPT_ROUNDS);
+    const hashedPassword = await bcrypt.hash(password, BCRYPT_ROUNDS);
 
     try {
-        return await User.createUser({
+        // Check if this will be the first user in the database
+        const countResult = await pool.query('SELECT COUNT(*)::int AS count FROM users');
+        const isFirstUser = countResult.rows[0].count === 0;
+
+        const newUser = await User.createUser({
             name,
             email,
             password: hashedPassword
         });
+
+        // Automatically assign role: first user gets 'Super Admin', subsequent users get 'User'
+        const roleNameToAssign = isFirstUser ? 'Super Admin' : 'User';
+        const roleResult = await pool.query(
+            'SELECT id FROM roles WHERE LOWER(role_name) = LOWER($1) LIMIT 1',
+            [roleNameToAssign]
+        );
+
+        if (roleResult.rowCount > 0) {
+            await pool.query(
+                'INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2) ON CONFLICT (user_id, role_id) DO NOTHING',
+                [newUser.id, roleResult.rows[0].id]
+            );
+        }
+
+        const fullUser = await User.findUserWithRolesAndPermissions(newUser.id);
+        return publicUser(fullUser);
 
     } catch (error) { 
         if (error.code === '23505') {
@@ -50,7 +74,6 @@ const createSession = async (user, familyId = crypto.randomUUID()) => {
 
     const client = await pool.connect(); 
     try {
-
         await client.query('BEGIN'); 
         await RefreshToken.createToken(client, {
             userId: user.id,
@@ -58,12 +81,10 @@ const createSession = async (user, familyId = crypto.randomUUID()) => {
             familyId,
             expiresAt
         });
-
         await client.query('COMMIT'); 
     } catch (error) { 
         await client.query('ROLLBACK');
         throw error;
-
     } finally { 
         client.release(); 
     }
@@ -78,17 +99,19 @@ const createSession = async (user, familyId = crypto.randomUUID()) => {
 // LOGIN
 const login = async ({ email, password }) => {
     const user = await User.findByEmail(email);
+    console.log("user ==> ", user);
     if (!user || !user.is_active) {
-        throw new AppError('Invalid email or password', 401);
+        throw new AppError('Email not Found', 401);
     }
 
-    const passwordMatch = await bcrypt.compare(password,user.password);
-
+    const passwordMatch = await bcrypt.compare(password, user.password);
     if (!passwordMatch) {
-        throw new AppError('Invalid email or password', 401);
+        throw new AppError('Invalid Password', 401);
     }
 
-    return createSession(user);
+    // Load full roles and permissions profile
+    const fullUser = await User.findUserWithRolesAndPermissions(user.id);
+    return createSession(fullUser);
 };
 
 // REFRESH TOKEN ROTATION
@@ -110,7 +133,6 @@ const refresh = async (refreshToken) => {
 
         // Detect reuse of an already rotated token
         if (token.revoked_at) {
-
             await RefreshToken.revokeFamily(
                 client,
                 token.family_id
@@ -126,7 +148,6 @@ const refresh = async (refreshToken) => {
         }
 
         if (new Date(token.expires_at) <= new Date()) {
-
             await RefreshToken.revokeToken(client, oldHash);
 
             await client.query('COMMIT');
@@ -135,10 +156,9 @@ const refresh = async (refreshToken) => {
             throw new AppError('Refresh token expired', 401);
         }
 
-        const user = await User.findById(token.user_id);
+        const user = await User.findUserWithRolesAndPermissions(token.user_id);
 
         if (!user || !user.is_active) {
-
             await RefreshToken.revokeFamily(
                 client,
                 token.family_id
@@ -180,33 +200,26 @@ const refresh = async (refreshToken) => {
         };
 
     } catch (error) {
-
         if (transactionOpen) {
             await client.query('ROLLBACK');
         }
-
         throw error;
-
     } finally {
-
         client.release();
-
     }
 };
 
 // LOGOUT CURRENT SESSION
 const logout = async (refreshToken) => {
-
     if (!refreshToken) return; 
     const client = await pool.connect(); 
     try { 
         await client.query('BEGIN'); 
-        await RefreshToken.revokeToken(client,hashRefreshToken(refreshToken));
+        await RefreshToken.revokeToken(client, hashRefreshToken(refreshToken));
         await client.query('COMMIT'); 
     } catch (error) { 
         await client.query('ROLLBACK');
         throw error;
-
     } finally { 
         client.release(); 
     }
@@ -214,46 +227,38 @@ const logout = async (refreshToken) => {
 
 // LOGOUT ALL DEVICES
 const logoutAll = async (userId) => {
-
     const client = await pool.connect();
-
     try {
-
         await client.query('BEGIN');
-
         await RefreshToken.revokeAllUserTokens(
             client,
             userId
         );
-
         await client.query('COMMIT');
-
     } catch (error) {
-
         await client.query('ROLLBACK');
         throw error;
-
     } finally {
-
         client.release();
-
     }
 };
 
 // CHANGE PASSWORD
-const changePassword = async (userId,currentPassword,newPassword) => {
+const changePassword = async (userId, currentPassword, newPassword) => {
+    const userQuery = await pool.query('SELECT password FROM users WHERE id = $1', [userId]);
+    const user = userQuery.rows[0];
 
-    const user = await User.findByEmail((await User.findById(userId)).email);
+    if (!user) {
+        throw new AppError('User not found', 404);
+    }
 
-    const valid = await bcrypt.compare(currentPassword,user.password);
-
+    const valid = await bcrypt.compare(currentPassword, user.password);
     if (!valid) {
         throw new AppError('Current password is incorrect', 400);
     }
-    const hashedPassword = await bcrypt.hash(newPassword,BCRYPT_ROUNDS); 
+    const hashedPassword = await bcrypt.hash(newPassword, BCRYPT_ROUNDS); 
     const client = await pool.connect(); 
     try {
-
         await client.query('BEGIN');
         await client.query(`
             UPDATE users
@@ -264,14 +269,10 @@ const changePassword = async (userId,currentPassword,newPassword) => {
         await RefreshToken.revokeAllUserTokens(client, userId); 
         await client.query('COMMIT'); 
     } catch (error) {
-
         await client.query('ROLLBACK');
         throw error;
-
     } finally {
-
         client.release();
-
     }
 };
 

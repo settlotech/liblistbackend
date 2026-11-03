@@ -22,7 +22,19 @@ const authLimiter = rateLimit({
     }
 });
 
+const emailLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 3,
+    standardHeaders: 'draft-8',
+    legacyHeaders: false,
+    message: {
+        success: false,
+        message: 'Too many email requests. Please wait 15 minutes before requesting another code.'
+    }
+});
+
 module.exports = {
     loginLimiter,
-    authLimiter
+    authLimiter,
+    emailLimiter
 };

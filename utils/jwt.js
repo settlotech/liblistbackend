@@ -2,8 +2,15 @@ const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 
 const generateAccessToken = (user) => {
+    const roles = Array.isArray(user.roles)
+        ? user.roles.map(r => (typeof r === 'string' ? r : r.role_name))
+        : (user.role ? [user.role] : []);
+
     return jwt.sign(
-        {role: user.role},
+        {
+            role: roles[0] || user.role || 'User',
+            roles
+        },
         process.env.JWT_ACCESS_SECRET,
         {
             subject: user.id,
@@ -26,9 +33,9 @@ const hashRefreshToken = (token) => {
 };
 
 const verifyAccessToken = (token) => {
-
     return jwt.verify(
-        token,process.env.JWT_ACCESS_SECRET,
+        token,
+        process.env.JWT_ACCESS_SECRET,
         {
             algorithms: ['HS256'],
             issuer: process.env.JWT_ISSUER,
