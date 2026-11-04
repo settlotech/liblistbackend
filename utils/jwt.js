@@ -1,6 +1,10 @@
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 
+const JWT_SECRET = process.env.JWT_ACCESS_SECRET || process.env.JWT_SECRET || 'libtrak_jwt_super_secret_key_2026_australia_enterprise';
+const JWT_ISSUER = process.env.JWT_ISSUER || 'libtrak-hub';
+const JWT_AUDIENCE = process.env.JWT_AUDIENCE || 'libtrak-users';
+
 const generateAccessToken = (user) => {
     const roles = Array.isArray(user.roles)
         ? user.roles.map(r => (typeof r === 'string' ? r : r.role_name))
@@ -9,14 +13,16 @@ const generateAccessToken = (user) => {
     return jwt.sign(
         {
             role: roles[0] || user.role || 'User',
-            roles
+            roles,
+            name: user.name,
+            email: user.email
         },
-        process.env.JWT_ACCESS_SECRET,
+        JWT_SECRET,
         {
-            subject: user.id,
+            subject: String(user.id),
             expiresIn: process.env.JWT_ACCESS_EXPIRY || '15m',
-            issuer: process.env.JWT_ISSUER,
-            audience: process.env.JWT_AUDIENCE,
+            issuer: JWT_ISSUER,
+            audience: JWT_AUDIENCE,
             algorithm: 'HS256'
         }
     );
@@ -35,11 +41,11 @@ const hashRefreshToken = (token) => {
 const verifyAccessToken = (token) => {
     return jwt.verify(
         token,
-        process.env.JWT_ACCESS_SECRET,
+        JWT_SECRET,
         {
             algorithms: ['HS256'],
-            issuer: process.env.JWT_ISSUER,
-            audience: process.env.JWT_AUDIENCE
+            issuer: JWT_ISSUER,
+            audience: JWT_AUDIENCE
         }
     );
 };

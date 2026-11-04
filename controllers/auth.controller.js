@@ -29,7 +29,8 @@ const login = async (req, res, next) => {
             message: 'Login successful',
             data: {
                 user: result.user,
-                accessToken: result.accessToken
+                accessToken: result.accessToken,
+                refreshToken: result.refreshToken
             }
         });
     } catch (error) {
@@ -40,7 +41,7 @@ const login = async (req, res, next) => {
 // REFRESH
 const refresh = async (req, res, next) => {
     try { 
-        const token = req.cookies.refreshToken;
+        const token = req.cookies?.refreshToken || req.body?.refreshToken || req.headers['x-refresh-token'];
         if (!token) {
             throw new AppError('Refresh token required', 401);
         }
@@ -53,7 +54,8 @@ const refresh = async (req, res, next) => {
             message: 'Token refreshed successfully',
             data: {
                 user: result.user,
-                accessToken: result.accessToken
+                accessToken: result.accessToken,
+                refreshToken: result.refreshToken
             }
         });
     } catch (error) {
