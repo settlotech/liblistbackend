@@ -271,6 +271,14 @@ ON CONFLICT (operation_name) DO NOTHING;
 
 -- 2. Default Modules
 -- Register the Predefined Module by Developers
+-- DELETE FROM modules
+-- WHERE module_name IN (
+--     'dashboard',
+--     'changelogs',
+--     'tasks',
+--     'templates',
+--     'documents'
+-- );
 INSERT INTO modules (module_name, display_name, is_active)
 VALUES
     ('users', 'User Management', TRUE),
@@ -278,11 +286,11 @@ VALUES
     ('permissions', 'Permission Management', TRUE),
     ('userrole', 'User Role Management', TRUE),
     -- ('documents', 'Document Management', TRUE),
-    ('usersrequest', 'New User Request Management', TRUE),
-    ('dashboard', 'DashBoard', TRUE),
-    ('changelogs', 'Change Management', TRUE),
-    ('tasks', 'APRA CPS 234 Tasks', TRUE),
-    ('templates', 'Policy Templates', TRUE)
+    ('usersrequest', 'New User Request Management', TRUE)
+    -- ('dashboard', 'DashBoard', TRUE),
+    -- ('changelogs', 'Change Management', TRUE),
+    -- ('tasks', 'APRA CPS 234 Tasks', TRUE),
+    -- ('templates', 'Policy Templates', TRUE)
 ON CONFLICT (module_name) DO NOTHING;
 
 -- 3. Default Roles

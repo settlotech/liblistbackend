@@ -49,7 +49,7 @@ const seedSuperAdmin = async () => {
                 [name, email, hashedPassword]
             );
             userId = insertRes.rows[0].id;
-            console.log(`[Init] Default Super Admin created: ${email}`);
+            console.log(` Default Super Admin created: ${email}`);
         } else {
             userId = userRes.rows[0].id;
             await pool.query(
