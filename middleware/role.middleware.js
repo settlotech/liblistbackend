@@ -1,10 +1,10 @@
 const AppError = require('../utils/appError');
 
-/**
- * Check if the user has a specific module:operation permission
- * Super Admin bypasses all checks.
- * Usage: checkPermission('roles', 'create') or checkPermission('users', 'read')
- */
+ 
+// Check if the user has a specific module:operation permission
+//Super Admin bypasses all checks.
+// Usage: checkPermission('roles', 'create') or checkPermission('users', 'read')
+ 
 const checkPermission = (moduleName, operationName) => {
     return (req, res, next) => {
         if (!req.user) {
@@ -36,11 +36,11 @@ const checkPermission = (moduleName, operationName) => {
     };
 };
 
-/**
- * Check if the user has any of the specified roles
- * Super Admin bypasses all checks.
- * Usage: authorizeRole('admin', 'manager') or authorize('admin')
- */
+ 
+// Check if the user has any of the specified roles
+// Super Admin bypasses all checks.
+// Usage: authorizeRole('admin', 'manager') or authorize('admin')
+  
 const authorizeRole = (...allowedRoles) => {
     const normalizedAllowed = allowedRoles.map(r => r.toLowerCase());
 
@@ -108,10 +108,10 @@ const authorizeAnyPermission = (permissionsList) => {
     };
 };
 
-/**
- * Check if user has ALL of the specified permissions
- * Usage: authorizeAllPermissions(['roles:create', 'roles:update'])
- */
+ 
+//Check if user has ALL of the specified permissions
+// Usage: authorizeAllPermissions(['roles:create', 'roles:update'])
+ 
 const authorizeAllPermissions = (permissionsList) => {
     return (req, res, next) => {
         if (!req.user) {
@@ -141,7 +141,7 @@ const authorizeAllPermissions = (permissionsList) => {
     };
 };
 
-// Backwards-compatible default export that also carries named properties
+ 
 const authorize = authorizeRole;
 authorize.authorize = authorizeRole;
 authorize.authorizeRole = authorizeRole;

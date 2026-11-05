@@ -277,9 +277,12 @@ VALUES
     ('roles', 'Role Management', TRUE),
     ('permissions', 'Permission Management', TRUE),
     ('userrole', 'User Role Management', TRUE),
-    ('documents', 'Document Management', TRUE),
+    -- ('documents', 'Document Management', TRUE),
     ('usersrequest', 'New User Request Management', TRUE),
-    ('dashboard', 'DashBoard', TRUE)
+    ('dashboard', 'DashBoard', TRUE),
+    ('changelogs', 'Change Management', TRUE),
+    ('tasks', 'APRA CPS 234 Tasks', TRUE),
+    ('templates', 'Policy Templates', TRUE)
 ON CONFLICT (module_name) DO NOTHING;
 
 -- 3. Default Roles

@@ -5,16 +5,15 @@ const {
   getTemplateById,
   createTemplate
 } = require('../controllers/templatesController');
-const { roleGuard } = require('../middleware/roleGuard');
+const authenticate = require('../middleware/auth.middleware');
+const { checkPermission } = require('../middleware/role.middleware');
 
-// GET /api/templates - List all dynamic policy starter templates
-router.get('/templates', getTemplates);
-
-// GET /api/templates/:id - Single template
-router.get('/templates/:id', getTemplateById);
-
-// POST /api/templates - Create dynamic template (Manager or Admin)
-router.post('/templates', roleGuard(['manager', 'admin']), createTemplate);
+ 
+router.use(authenticate); 
+router.get('/templates', checkPermission('templates', 'read'), getTemplates);
+ 
+router.get('/templates/:id', checkPermission('templates', 'read'), getTemplateById);
+ 
+router.post('/templates', checkPermission('templates', 'create'), createTemplate);
 
 module.exports = router;
-
