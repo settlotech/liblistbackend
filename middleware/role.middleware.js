@@ -16,13 +16,17 @@ const checkPermission = (moduleName, operationName) => {
             return next();
         }
 
-        const required = `${moduleName.toLowerCase()}:${operationName.toLowerCase()}`;
+        const modules = Array.isArray(moduleName) ? moduleName : [moduleName];
         const userPermissions = req.user.permissionStrings || [];
 
-        if (!userPermissions.includes(required)) {
+        const hasAccess = modules.some(m =>
+            userPermissions.includes(`${m.toLowerCase()}:${operationName.toLowerCase()}`)
+        );
+
+        if (!hasAccess) {
             return next(
                 new AppError(
-                    `Access denied: You do not have '${operationName}' permission on '${moduleName}'`,
+                    `Access denied: You do not have '${operationName}' permission on '${modules.join(' or ')}'`,
                     403
                 )
             );

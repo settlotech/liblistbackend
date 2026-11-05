@@ -34,9 +34,7 @@ const findById = async (id) => {
     return result.rows[0];
 };
 
-/**
- * Fetch a user with full dynamic RBAC profile: roles, permissions, and flags
- */
+ 
 const findUserWithRolesAndPermissions = async (id) => {
     const user = await findById(id);
     if (!user) return null;
@@ -265,6 +263,11 @@ const markOtpAsUsed = async (tokenId) => {
     await pool.query(query, [tokenId]);
 };
 
+
+const fetchSuperadmins = async()=>{
+   const result = await fetchUsersWithRoles();
+   return result
+}
 module.exports = {
     createUser,
     findByEmail,
@@ -283,5 +286,7 @@ module.exports = {
     savePasswordResetOtp,
     verifyPasswordResetOtp,
     markOtpAsUsed,
-    getLatestPasswordResetOtp
+    getLatestPasswordResetOtp,
+
+    fetchSuperadmins
 };

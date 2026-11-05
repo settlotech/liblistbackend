@@ -51,6 +51,9 @@ const templatesRouter = require('./routes/templates');
 const tasksRouter = require('./routes/tasks');
 const aiRouter = require('./routes/ai');
 const vectorsRouter = require('./routes/vectors');
+const notificationRoutes = require('./routes/notification.route');
+const signupRoutes = require('./routes/userrequest.route');
+
 
 // Standalone 3D Vector DB Viewer & TensorFlow Projector
 const { get3dViewerHtml } = require('./views/viewerHtml');
@@ -99,6 +102,8 @@ app.use('/api/auth', authRoutes);
 app.use('/api/roles', roleRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/settings', settingRoutes);
+app.use('/api/notifications', notificationRoutes);
+app.use('/api/signup', signupRoutes);
 
 // Mount Banking Governance routes
 app.use('/api', departmentsRouter);
@@ -109,7 +114,7 @@ app.use('/api', metricsRouter);
 app.use('/api', templatesRouter);
 app.use('/api', tasksRouter);
 app.use('/api', aiRouter);
-app.use('/api', vectorsRouter);
+app.use('/api', vectorsRouter); 
 
 // Centralized error handling
 app.use(notFound);
