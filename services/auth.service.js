@@ -8,8 +8,9 @@ const { generateAccessToken, generateRefreshToken, hashRefreshToken } = require(
 const User = require('../models/user.model');
 const RefreshToken = require('../models/refreshToken.model');
 
-const BCRYPT_ROUNDS = Number(process.env.BCRYPT_ROUNDS || 12); 
-const REFRESH_DAYS = Number(process.env.REFRESH_TOKEN_DAYS || 7);
+const BCRYPT_ROUNDS = Number(process.env.BCRYPT_ROUNDS); 
+const REFRESH_DAYS = Number(process.env.REFRESH_TOKEN_DAYS);
+const SHORT_SESSION_DAYS = Number(process.env.SHORT_SESSION_DAYS);;  
 
 const publicUser = (user) => ({
     id: user.id,
@@ -67,10 +68,11 @@ const register = async ({ name, email, password }) => {
 };
 
 // CREATE SESSION
-const createSession = async (user, familyId = crypto.randomUUID()) => { 
+const createSession = async (user, familyId = crypto.randomUUID(), rememberMe = false) => { 
     const refreshToken = generateRefreshToken(); 
     const tokenHash = hashRefreshToken(refreshToken); 
-    const expiresAt = new Date(Date.now() + REFRESH_DAYS * 24 * 60 * 60 * 1000);
+    const days = rememberMe ? REFRESH_DAYS : SHORT_SESSION_DAYS;
+    const expiresAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000);
 
     const client = await pool.connect(); 
     try {
@@ -97,9 +99,8 @@ const createSession = async (user, familyId = crypto.randomUUID()) => {
 };
 
 // LOGIN
-const login = async ({ email, password }) => {
-    const user = await User.findByEmail(email);
-    console.log("user ==> ", user);
+const login = async ({ email, password,rememberMe }) => { 
+    const user = await User.findByEmail(email); 
     if (!user || !user.is_active) {
         throw new AppError('Email not Found', 401);
     }
@@ -111,7 +112,7 @@ const login = async ({ email, password }) => {
 
     // Load full roles and permissions profile
     const fullUser = await User.findUserWithRolesAndPermissions(user.id);
-    return createSession(fullUser);
+    return createSession(fullUser, undefined, rememberMe);
 };
 
 // REFRESH TOKEN ROTATION

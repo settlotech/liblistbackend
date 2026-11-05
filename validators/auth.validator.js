@@ -11,8 +11,8 @@ const registerSchema = z.object({
 
 const loginSchema = z.object({
     email: z.string().trim().email().max(255).transform(value => value.toLowerCase()),
-    password: z.string().min(1).max(72).refine(value => Buffer.byteLength(value, 'utf8') <= 72)
-
+    password: z.string().min(1).max(72).refine(value => Buffer.byteLength(value, 'utf8') <= 72),
+    rememberMe : z.boolean()
 }).strict();
 
 const profileSchema = z.object({
