@@ -140,9 +140,7 @@ const getKpis = async ({ departmentId, timeRange = '30d' }) => {
     };
 };
 
-/**
- * Detailed Maker-Checker (4-Eyes) analytics & SLA aging buckets
- */
+ 
 const getMakerCheckerAnalytics = async ({ departmentId }) => {
     const deptParam = departmentId && departmentId !== 'all' ? departmentId : null;
 
@@ -207,9 +205,7 @@ const getMakerCheckerAnalytics = async ({ departmentId }) => {
     };
 };
 
-/**
- * Policy lifecycle, distribution, and document hygiene
- */
+ 
 const getPolicyLifecycleMetrics = async () => {
     // 1. Policies count & status breakdown per Department
     const deptBreakdownQuery = `
@@ -257,9 +253,7 @@ const getPolicyLifecycleMetrics = async () => {
     };
 };
 
-/**
- * Daily Audit Log activity trend for the past N days
- */
+ 
 const getChangeActivityTimeline = async (days = 14) => {
     const safeDays = Math.min(Math.max(parseInt(days, 10) || 14, 7), 90);
 
@@ -293,9 +287,7 @@ const getChangeActivityTimeline = async (days = 14) => {
     };
 };
 
-/**
- * Operational SLA metrics breakdown from operational_metrics table
- */
+ 
 const getOperationalMetrics = async ({ departmentId }) => {
     let sql = `
         SELECT om.*, d.name AS department_name
