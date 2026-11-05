@@ -53,6 +53,7 @@ const aiRouter = require('./routes/ai');
 const vectorsRouter = require('./routes/vectors');
 const notificationRoutes = require('./routes/notification.route');
 const signupRoutes = require('./routes/userrequest.route');
+const dashboardRoutes = require('./routes/dashboard.route');
 
 
 // Standalone 3D Vector DB Viewer & TensorFlow Projector
@@ -79,6 +80,7 @@ app.get('/', (req, res) => {
             tasks: '/api/tasks',
             change_logs: '/api/change-logs',
             metrics: '/api/dashboard-metrics',
+            dashboard: '/api/dashboard',
             templates: '/api/templates',
             ingest: '/api/ai/ingest-documents',
             rag: '/api/ai/rag-query',
@@ -104,6 +106,7 @@ app.use('/api/users', userRoutes);
 app.use('/api/settings', settingRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/signup', signupRoutes);
+app.use('/api/dashboard', dashboardRoutes);
 
 // Mount Banking Governance routes
 app.use('/api', departmentsRouter);
