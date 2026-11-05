@@ -6,14 +6,11 @@ const {
   createTemplate
 } = require('../controllers/templatesController');
 const authenticate = require('../middleware/auth.middleware');
-const { checkPermission } = require('../middleware/role.middleware');
 
- 
+// Protect all template endpoints with JWT authentication (Common for all users)
 router.use(authenticate); 
-router.get('/templates', checkPermission('templates', 'read'), getTemplates);
- 
-router.get('/templates/:id', checkPermission('templates', 'read'), getTemplateById);
- 
-router.post('/templates', checkPermission('templates', 'create'), createTemplate);
+router.get('/templates', getTemplates);
+router.get('/templates/:id', getTemplateById);
+router.post('/templates', createTemplate);
 
 module.exports = router;

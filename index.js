@@ -48,7 +48,8 @@ const makerCheckerRouter = require('./routes/makerChecker');
 const changeLogsRouter = require('./routes/changeLogs');
 const metricsRouter = require('./routes/metrics');
 const templatesRouter = require('./routes/templates');
-const tasksRouter = require('./routes/tasks');
+
+const taskModuleRouter = require('./routes/task.routes');
 const aiRouter = require('./routes/ai');
 const vectorsRouter = require('./routes/vectors');
 const notificationRoutes = require('./routes/notification.route');
@@ -115,7 +116,12 @@ app.use('/api', makerCheckerRouter);
 app.use('/api', changeLogsRouter);
 app.use('/api', metricsRouter);
 app.use('/api', templatesRouter);
-app.use('/api', tasksRouter);
+ 
+
+
+// New Task Management Module for Demo Purpose 
+app.use('/api', taskModuleRouter);
+
 app.use('/api', aiRouter);
 app.use('/api', vectorsRouter); 
 
