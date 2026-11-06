@@ -319,14 +319,14 @@ ON CONFLICT (operation_name) DO NOTHING;
 
 -- 2. Default Modules
 -- Register the Predefined Module by Developers
--- DELETE FROM modules
--- WHERE module_name IN (
---     'dashboard',
---     'changelogs',
---     'tasks',
---     'templates',
---     'documents'
--- );
+DELETE FROM modules
+WHERE module_name IN (
+    'dashboard',
+    'changelogs',
+    'tasks',
+    'templates',
+    'documents'
+);
 INSERT INTO modules (module_name, display_name, is_active)
 VALUES
     ('users', 'User Management', TRUE),
@@ -379,12 +379,110 @@ WHERE r.role_name = 'User'
   AND o.operation_name = 'read'
 ON CONFLICT (role_id, module_id, operation_id) DO NOTHING;
 
--- ==========================================
--- 7. Default Super Admin User Account
--- Email: settlo@gmail.com
--- Password: 123456
--- Role: Super Admin
--- ==========================================
+
+-- Safe migration for existing legacy tasks table
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 
+        FROM information_schema.columns 
+        WHERE table_schema = 'public' 
+          AND table_name = 'tasks' 
+          AND column_name = 'id' 
+          AND data_type IN ('integer', 'bigint', 'smallint')
+    ) THEN
+        DROP TABLE IF EXISTS task_participants CASCADE;
+        DROP TABLE IF EXISTS task_logs CASCADE;
+        DROP TABLE IF EXISTS user_task_pins CASCADE;
+        ALTER TABLE tasks RENAME TO legacy_compliance_tasks;
+    END IF;
+END $$;
+
+CREATE SEQUENCE IF NOT EXISTS task_code_sequence START 1;
+
+CREATE TABLE IF NOT EXISTS tasks (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    task_code VARCHAR(50) UNIQUE NOT NULL DEFAULT ('TASK-' || LPAD(nextval('task_code_sequence')::TEXT, 6, '0')),
+    title VARCHAR(255) NOT NULL,
+    description TEXT,
+    category VARCHAR(20) NOT NULL DEFAULT 'general' CHECK (category IN ('common', 'general')),
+    created_from VARCHAR(30) NOT NULL DEFAULT 'task_pane' CHECK (created_from = 'task_pane'),
+    library_id UUID,
+    section_id UUID,
+    created_by UUID NOT NULL REFERENCES users(id),
+    assigned_to UUID REFERENCES users(id),
+    status VARCHAR(20) NOT NULL DEFAULT 'pending'
+        CHECK (status IN (
+                'pending',
+                'responded',
+                'completed',
+                'approved',
+                'cancelled'
+            )
+        ),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS task_participants (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    task_id UUID NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    role VARCHAR(20) NOT NULL CHECK (role IN ('approver','reviewer','for_info' )),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(task_id, user_id, role)
+);
+
+CREATE SEQUENCE IF NOT EXISTS task_code_sequence START 1;
+ALTER TABLE tasks ALTER COLUMN task_code SET DEFAULT ('TASK-' || LPAD(nextval('task_code_sequence')::TEXT, 6, '0'));
+CREATE TABLE IF NOT EXISTS task_logs (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    task_id UUID NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    action VARCHAR(30) NOT NULL
+        CHECK (
+            action IN (
+                'created',
+                'assigned',
+                'reassigned',
+                'status_changed',
+                'approved',
+                'responded',
+                'completed',
+                'cancelled',
+                'commented',
+                'updated'
+            )
+        ),
+
+    performed_by UUID NOT NULL REFERENCES users(id),
+    old_value TEXT,
+    new_value TEXT,
+    comment TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS user_task_pins (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    task_id UUID NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    pinned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(task_id, user_id)
+);
+
+
+
+CREATE INDEX IF NOT EXISTS idx_tasks_created_by ON tasks(created_by);
+
+CREATE INDEX IF NOT EXISTS idx_tasks_assigned_to ON tasks(assigned_to);
+CREATE INDEX  IF NOT EXISTS idx_tasks_status ON tasks(status);
+CREATE INDEX IF NOT EXISTS  idx_tasks_category ON tasks(category);
+CREATE INDEX IF NOT EXISTS idx_tasks_library ON tasks(library_id, section_id);
+CREATE INDEX IF NOT EXISTS idx_task_logs_task_id ON task_logs(task_id);
+CREATE INDEX IF NOT EXISTS idx_task_logs_created_at ON task_logs(created_at DESC);
+CREATE INDEX  IF NOT EXISTS idx_task_participants_user ON task_participants(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_task_pins_user ON user_task_pins(user_id);
+
+
 DO $$
 DECLARE
     v_role_id INTEGER;

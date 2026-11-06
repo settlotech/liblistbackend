@@ -94,6 +94,15 @@ const initDatabase = async () => {
         await pool.query(sql);
         console.log('Database tables created successfully');
 
+        // Apply Task Management Module schema migration
+        const migrationPath = path.join(__dirname, 'task_tables_migration.sql');
+        console.log("migrationPath ==> ", migrationPath);
+        if (fs.existsSync(migrationPath)) {
+            const migrationSql = fs.readFileSync(migrationPath, 'utf8');
+            await pool.query(migrationSql);
+            console.log('Task Management Module migration applied successfully');
+        }
+
         await seedSuperAdmin();
     } catch (error) {
         console.error('Database initialization failed:', error);
