@@ -1,14 +1,7 @@
 const taskModel = require('../models/task.model');
 const AppError = require('../utils/appError');
 const notificationService = require('./notification.service');
-
-/**
- * Dispatch an in-app and push notification to a recipient based on their responsibility
- * @param {string} userId - Recipient user UUID
- * @param {string} role - 'assignee' | 'approver' | 'reviewer' | 'for_info'
- * @param {object} task - Task details (id, task_code, title)
- * @param {string} [assignerName] - Name of the user performing the assignment
- */
+ 
 const sendParticipantNotification = async (userId, role, task, assignerName) => {
     if (!userId) return;
     const taskCode = task.task_code || 'Task';

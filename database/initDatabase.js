@@ -89,6 +89,8 @@ const seedSuperAdmin = async () => {
 
 const initDatabase = async () => {
     try {
+
+        // Default basic Tables
         const schemaPath = path.join(__dirname, 'schema.sql');
         const sql = fs.readFileSync(schemaPath, 'utf8'); 
         await pool.query(sql);
@@ -96,11 +98,18 @@ const initDatabase = async () => {
 
         // Apply Task Management Module schema migration
         const migrationPath = path.join(__dirname, 'task_tables_migration.sql');
-        console.log("migrationPath ==> ", migrationPath);
         if (fs.existsSync(migrationPath)) {
             const migrationSql = fs.readFileSync(migrationPath, 'utf8');
             await pool.query(migrationSql);
             console.log('Task Management Module migration applied successfully');
+        }
+
+        // Apply Document Management System schema (libSchema.sql)
+        const dmsSchemaPath = path.join(__dirname, 'libSchema.sql');
+        if (fs.existsSync(dmsSchemaPath)) {
+            const dmsSql = fs.readFileSync(dmsSchemaPath, 'utf8');
+            await pool.query(dmsSql);
+            console.log('Document Management schema  applied successfully');
         }
 
         await seedSuperAdmin();
