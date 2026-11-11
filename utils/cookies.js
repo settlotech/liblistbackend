@@ -4,12 +4,12 @@ const setRefreshCookie = (res, token, rememberMe) => {
     const options = {
         httpOnly: true,
         secure: isProduction,
-        sameSite: 'strict',
+        sameSite: isProduction ? 'strict' : 'lax',
         path: '/api/auth'
     };
  
     if (rememberMe) {
-        options.maxAge = Number(process.env.REFRESH_TOKEN_DAYS) * 24 * 60 * 60 * 1000;
+        options.maxAge = (Number(process.env.REFRESH_TOKEN_DAYS) || 7) * 24 * 60 * 60 * 1000;
     }
 
     res.cookie('refreshToken', token, options);

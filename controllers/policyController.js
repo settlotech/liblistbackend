@@ -33,7 +33,7 @@ async function getPolicies(req, res, next) {
     const result = await query(`
       SELECT
         p.id, p.department_id, p.title, p.summary, p.version, p.status, p.is_masked,
-        p.created_by, p.created_at, p.updated_at,
+        p.created_by, p.created_at, p.updated_at, p.content, p.parameters,
         d.name AS department_name,
         p.parameters->>'turnaround_sla'   AS turnaround_sla,
         p.parameters->>'daily_limit'      AS daily_limit,
@@ -202,7 +202,9 @@ async function updatePolicy(req, res, next) {
       updated_by = 'Staff User',
       user_role = 'employee',
       justification = 'Operational amendment',
-      change_summary = 'Parameters updated'
+      change_summary = 'Parameters updated',
+      status: requestedStatus,
+      version: requestedVersion
     } = req.body;
 
     const currentRes = await query('SELECT * FROM policies WHERE id = $1', [id]);
@@ -212,7 +214,26 @@ async function updatePolicy(req, res, next) {
     const authorName = updated_by || user_name;
 
     // Case 1: Active policy updated by Bank Employee -> routes to Maker-Checker queue
-    if (current.status === 'active' && user_role === 'employee') {
+    // Case 0: Saving an Active policy as a Draft revision (e.g. employee or manager configured copy)
+    if (current.status === 'active' && requestedStatus === 'draft') {
+      const baseId = (title || current.title).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '').substring(0, 80);
+      const suffix = Math.floor(Math.random() * 9000) + 1000;
+      const draftId = `${baseId}-${suffix}`;
+      const draftVer = requestedVersion || '1.0';
+      const insertDraft = await query(
+        `INSERT INTO policies (id, department_id, title, summary, content, parameters, status, created_by, version)
+         VALUES ($1, $2, $3, $4, $5, $6, 'draft', $7, $8) RETURNING *;`,
+        [draftId, current.department_id, title || current.title, summary || current.summary, content || current.content, parameters ? JSON.stringify(parameters) : JSON.stringify(current.parameters || {}), authorName, draftVer]
+      );
+      await query(
+        `INSERT INTO policy_versions (policy_id, version_number, content, parameters, changed_by, change_summary)
+         VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING;`,
+        [draftId, draftVer, content || current.content, parameters ? JSON.stringify(parameters) : JSON.stringify(current.parameters || {}), authorName, `Created draft revision from active policy by ${authorName}`]
+      ).catch(() => {});
+      return res.json(insertDraft.rows[0]);
+    }
+
+    if (current.status === 'active' && user_role === 'employee' && requestedStatus !== 'draft') {
       const mcRes = await query(
         `INSERT INTO maker_checker_requests
            (policy_id, policy_title, department_name, maker_name, maker_role, proposed_changes, status, is_closed)
@@ -242,21 +263,29 @@ async function updatePolicy(req, res, next) {
 
     // Case 2: Saving a Draft policy (stays draft, preserves version or keeps v0.9/v1.0)
     if (current.status === 'draft') {
+      const draftVer = requestedVersion || current.version || '1.0';
       const result = await query(
         `UPDATE policies
          SET title = COALESCE($1, title),
              summary = COALESCE($2, summary),
              content = COALESCE($3, content),
              parameters = COALESCE($4::jsonb, parameters),
+             version = $5,
              updated_at = CURRENT_TIMESTAMP
-         WHERE id = $5 RETURNING *;`,
-        [title, summary, content, parameters ? JSON.stringify(parameters) : null, id]
+         WHERE id = $6 RETURNING *;`,
+        [title, summary, content, parameters ? JSON.stringify(parameters) : null, draftVer, id]
       );
+
+      await query(
+        `INSERT INTO policy_versions (policy_id, version_number, content, parameters, changed_by, change_summary)
+         VALUES ($1, $2, $3, $4, $5, $6);`,
+        [id, draftVer, content || current.content, parameters ? JSON.stringify(parameters) : JSON.stringify(current.parameters || {}), authorName, justification || change_summary || 'Draft clauses and parameters updated']
+      ).catch(() => {});
 
       await query(
         `INSERT INTO change_logs (entity_type, entity_id, user_name, action, section_name, details)
          VALUES ('policy', $1, $2, 'DRAFT_UPDATED', $3, $4);`,
-        [id, authorName, current.department_id, `Draft "${title || current.title}" clauses and thresholds updated.`]
+        [id, authorName, current.department_id, `Draft "${title || current.title}" (${draftVer}) updated by ${authorName}.`]
       );
 
       return res.json(result.rows[0]);

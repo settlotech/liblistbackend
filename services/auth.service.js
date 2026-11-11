@@ -8,9 +8,9 @@ const { generateAccessToken, generateRefreshToken, hashRefreshToken } = require(
 const User = require('../models/user.model');
 const RefreshToken = require('../models/refreshToken.model');
 
-const BCRYPT_ROUNDS = Number(process.env.BCRYPT_ROUNDS); 
-const REFRESH_DAYS = Number(process.env.REFRESH_TOKEN_DAYS);
-const SHORT_SESSION_DAYS = Number(process.env.SHORT_SESSION_DAYS);;  
+const BCRYPT_ROUNDS = Number(process.env.BCRYPT_ROUNDS) || 12; 
+const REFRESH_DAYS = Number(process.env.REFRESH_TOKEN_DAYS) || 7;
+const SHORT_SESSION_DAYS = Number(process.env.SHORT_SESSION_DAYS) || 1;  
 
 const publicUser = (user) => ({
     id: user.id,
@@ -18,6 +18,7 @@ const publicUser = (user) => ({
     email: user.email,
     roles: user.roles || [],
     role: user.role || (user.roles && user.roles[0]?.role_name) || 'User',
+    roleType: user.role_type || (user.isSuperAdmin ? 'admin' : (user.role?.toLowerCase().includes('owner') || user.role?.toLowerCase().includes('manager') ? 'manager' : 'employee')),
     permissions: user.permissionStrings || [],
     isSuperAdmin: Boolean(user.isSuperAdmin)
 });
@@ -71,25 +72,15 @@ const register = async ({ name, email, password }) => {
 const createSession = async (user, familyId = crypto.randomUUID(), rememberMe = false) => { 
     const refreshToken = generateRefreshToken(); 
     const tokenHash = hashRefreshToken(refreshToken); 
-    const days = rememberMe ? REFRESH_DAYS : SHORT_SESSION_DAYS;
-    const expiresAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000);
+    const days = rememberMe ? (REFRESH_DAYS || 7) : (SHORT_SESSION_DAYS || 1);
+    const expiresAt = new Date(Date.now() + (Number(days) || 1) * 24 * 60 * 60 * 1000);
 
-    const client = await pool.connect(); 
-    try {
-        await client.query('BEGIN'); 
-        await RefreshToken.createToken(client, {
-            userId: user.id,
-            tokenHash,
-            familyId,
-            expiresAt
-        });
-        await client.query('COMMIT'); 
-    } catch (error) { 
-        await client.query('ROLLBACK');
-        throw error;
-    } finally { 
-        client.release(); 
-    }
+    await RefreshToken.createToken(pool, {
+        userId: user.id,
+        tokenHash,
+        familyId,
+        expiresAt
+    });
 
     return {
         user: publicUser(user),
@@ -110,8 +101,8 @@ const login = async ({ email, password,rememberMe }) => {
         throw new AppError('Invalid Password', 401);
     }
 
-    // Load full roles and permissions profile
-    const fullUser = await User.findUserWithRolesAndPermissions(user.id);
+    // Load full roles and permissions profile passing existing user to skip redundant query
+    const fullUser = await User.findUserWithRolesAndPermissions(user.id, user);
     return createSession(fullUser, undefined, rememberMe);
 };
 

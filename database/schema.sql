@@ -407,10 +407,10 @@ CREATE TABLE IF NOT EXISTS tasks (
     description TEXT,
     category VARCHAR(20) NOT NULL DEFAULT 'general' CHECK (category IN ('common', 'general')),
     created_from VARCHAR(30) NOT NULL DEFAULT 'task_pane' CHECK (created_from = 'task_pane'),
-    library_id UUID,
-    section_id UUID,
-    created_by UUID NOT NULL REFERENCES users(id),
-    assigned_to UUID REFERENCES users(id),
+    library_id VARCHAR(100),
+    section_id VARCHAR(100),
+    created_by VARCHAR(255) NOT NULL REFERENCES users(id),
+    assigned_to VARCHAR(255) REFERENCES users(id),
     status VARCHAR(20) NOT NULL DEFAULT 'pending'
         CHECK (status IN (
                 'pending',
@@ -427,7 +427,7 @@ CREATE TABLE IF NOT EXISTS tasks (
 CREATE TABLE IF NOT EXISTS task_participants (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     task_id UUID NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    user_id VARCHAR(255) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     role VARCHAR(20) NOT NULL CHECK (role IN ('approver','reviewer','for_info' )),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(task_id, user_id, role)
@@ -454,7 +454,7 @@ CREATE TABLE IF NOT EXISTS task_logs (
             )
         ),
 
-    performed_by UUID NOT NULL REFERENCES users(id),
+    performed_by VARCHAR(255) NOT NULL REFERENCES users(id),
     old_value TEXT,
     new_value TEXT,
     comment TEXT,
@@ -464,7 +464,7 @@ CREATE TABLE IF NOT EXISTS task_logs (
 CREATE TABLE IF NOT EXISTS user_task_pins (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     task_id UUID NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    user_id VARCHAR(255) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     pinned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(task_id, user_id)
 );

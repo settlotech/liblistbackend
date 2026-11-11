@@ -31,6 +31,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 // Cookie parser
 app.use(cookieParser());
 app.use(morgan('dev'));
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 const { notFound, errorHandler } = require('./middleware/error.middleware');
 const initDatabase = require('./database/initDatabase');
@@ -108,6 +109,14 @@ app.use('/api/settings', settingRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/signup', signupRoutes);
 app.use('/api/dashboard', dashboardRoutes);
+
+try {
+    const documentManagementRoutes = require('./routes/documentManagement.routes');
+    app.use('/api/document-management', documentManagementRoutes);
+    console.log('DMS API mounted at /api/document-management');
+} catch (dmsError) {
+    console.warn('DMS routes could not be mounted:', dmsError.message);
+}
 
 // Mount Banking Governance routes
 app.use('/api', departmentsRouter);
