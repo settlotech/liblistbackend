@@ -84,13 +84,34 @@ async function getPolicyById(req, res, next) {
       try { policy.parameters = JSON.parse(policy.parameters); } catch (_) {}
     }
 
-    // Version history
+    // Version history with full content, sections, and metadata
     const versions = await query(
-      `SELECT id, version_number, changed_by, change_summary, created_at
-       FROM policy_versions WHERE policy_id = $1 ORDER BY created_at DESC LIMIT 20;`,
+      `SELECT id, version_number, content, parameters, changed_by, change_summary, created_at
+       FROM policy_versions WHERE policy_id = $1 ORDER BY created_at DESC LIMIT 30;`,
       [id]
     );
-    policy.versions = versions.rows;
+
+    if (versions.rows.length > 0) {
+      policy.versions = versions.rows.map(v => {
+        let vParams = v.parameters;
+        if (typeof vParams === 'string') {
+          try { vParams = JSON.parse(vParams); } catch (_) {}
+        }
+        return { ...v, parameters: vParams };
+      });
+    } else if (policy.parameters?.versions && Array.isArray(policy.parameters.versions)) {
+      policy.versions = policy.parameters.versions.map((v, i) => ({
+        id: `pv-${i}`,
+        version_number: v.version || `v1.${i}`,
+        changed_by: v.version_author || v.author || policy.created_by,
+        change_summary: v.notes || v.summary || 'Draft revision snapshot',
+        created_at: v.timestamp || policy.updated_at,
+        content: v.content || policy.content,
+        parameters: { ...policy.parameters, sections: v.sections || [] }
+      }));
+    } else {
+      policy.versions = [];
+    }
 
     // Contextual artifacts (training sessions, reports, faqs)
     const artifacts = await query(
@@ -502,6 +523,409 @@ async function getContextualArtifacts(req, res, next) {
   }
 }
 
+/**
+ * GET /api/policies/:id/versions
+ * Retrieves all recorded version snapshots for a policy or draft.
+ */
+async function getPolicyVersions(req, res, next) {
+  try {
+    const { id } = req.params;
+    const vRes = await query(
+      `SELECT id, version_number, content, parameters, changed_by, change_summary, created_at
+       FROM policy_versions WHERE policy_id = $1 ORDER BY created_at DESC LIMIT 50;`,
+      [id]
+    );
+
+    let versions = vRes.rows.map(v => {
+      let params = v.parameters;
+      if (typeof params === 'string') {
+        try { params = JSON.parse(params); } catch (_) {}
+      }
+      return {
+        id: v.id,
+        version: v.version_number,
+        version_number: v.version_number,
+        content: v.content,
+        parameters: params,
+        sections: params?.sections || [],
+        changed_by: v.changed_by,
+        version_author: v.changed_by,
+        change_summary: v.change_summary,
+        notes: v.change_summary,
+        created_at: v.created_at,
+        timestamp: v.created_at
+      };
+    });
+
+    if (versions.length === 0) {
+      const pRes = await query('SELECT parameters, created_by, updated_at FROM policies WHERE id = $1', [id]);
+      if (pRes.rowCount > 0) {
+        let pParams = pRes.rows[0].parameters;
+        if (typeof pParams === 'string') {
+          try { pParams = JSON.parse(pParams); } catch (_) {}
+        }
+        if (pParams?.versions && Array.isArray(pParams.versions)) {
+          versions = pParams.versions.map((v, i) => ({
+            id: `snap-${i}`,
+            version: v.version || `v1.${i}`,
+            version_number: v.version || `v1.${i}`,
+            version_author: v.version_author || v.author || pRes.rows[0].created_by,
+            changed_by: v.version_author || v.author || pRes.rows[0].created_by,
+            notes: v.notes || v.summary || 'Draft revision snapshot',
+            change_summary: v.notes || v.summary || 'Draft revision snapshot',
+            created_at: v.timestamp || pRes.rows[0].updated_at,
+            timestamp: v.timestamp || pRes.rows[0].updated_at,
+            sections: v.sections || pParams.sections || [],
+            parameters: { ...pParams, sections: v.sections || [] }
+          }));
+        }
+      }
+    }
+
+    res.json({ success: true, versions });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * POST /api/policies/:id/restore
+ * Restores a chosen historical version snapshot.
+ */
+async function restorePolicyVersion(req, res, next) {
+  try {
+    const { id } = req.params;
+    const versionId = req.params.versionId || req.body.versionId || req.body.version_id;
+    const authorName = req.body.user_name || req.body.userName || 'Marcus Vance';
+
+    if (!versionId) return res.status(400).json({ error: 'versionId is required to restore' });
+
+    // 1. Try finding in policy_versions table
+    let target = null;
+    if (!String(versionId).startsWith('snap-')) {
+      const vRes = await query(
+        `SELECT * FROM policy_versions WHERE policy_id = $1 AND (id = $2 OR version_number = $2) LIMIT 1;`,
+        [id, versionId]
+      );
+      if (vRes.rowCount > 0) target = vRes.rows[0];
+    }
+
+    const curRes = await query('SELECT * FROM policies WHERE id = $1', [id]);
+    if (curRes.rowCount === 0) return res.status(404).json({ error: 'Policy not found' });
+    const current = curRes.rows[0];
+
+    let targetParams = target ? target.parameters : null;
+    let targetContent = target ? target.content : null;
+    let targetVersionNum = target ? target.version_number : null;
+
+    // 2. Fallback to parameters.versions if not found in policy_versions
+    if (!target) {
+      let curParams = current.parameters;
+      if (typeof curParams === 'string') {
+        try { curParams = JSON.parse(curParams); } catch (_) {}
+      }
+      const foundInList = (curParams?.versions || []).find(
+        (v, i) => `snap-${i}` === String(versionId) || v.version === String(versionId)
+      );
+      if (foundInList) {
+        targetParams = { ...curParams, sections: foundInList.sections || curParams.sections };
+        targetContent = foundInList.content || current.content;
+        targetVersionNum = foundInList.version;
+      }
+    }
+
+    if (!targetParams && !targetContent) {
+      return res.status(404).json({ error: 'Version snapshot not found' });
+    }
+
+    if (typeof targetParams === 'string') {
+      try { targetParams = JSON.parse(targetParams); } catch (_) {}
+    }
+
+    // 3. Update active draft / policy
+    const updateRes = await query(
+      `UPDATE policies
+       SET content = COALESCE($1, content),
+           parameters = COALESCE($2::jsonb, parameters),
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $3 RETURNING *;`,
+      [targetContent, JSON.stringify(targetParams), id]
+    );
+
+    // 4. Record new restore event in policy_versions
+    const restoreSummary = `Restored revision ${targetVersionNum || versionId} by ${authorName}`;
+    await query(
+      `INSERT INTO policy_versions (policy_id, version_number, content, parameters, changed_by, change_summary)
+       VALUES ($1, $2, $3, $4, $5, $6);`,
+      [id, current.version || '1.0', targetContent, JSON.stringify(targetParams), authorName, restoreSummary]
+    ).catch(() => {});
+
+    // 5. Change log
+    await query(
+      `INSERT INTO change_logs (entity_type, entity_id, user_name, action, section_name, details)
+       VALUES ('policy', $1, $2, 'VERSION_RESTORED', $3, $4);`,
+      [id, authorName, current.department_id, restoreSummary]
+    );
+
+    res.json({ success: true, message: restoreSummary, policy: updateRes.rows[0] });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * GET /api/policies/:id/comments
+ * Retrieves all stored comments for a policy document from PostgreSQL DB.
+ */
+async function getPolicyComments(req, res, next) {
+  try {
+    const { id } = req.params;
+    const result = await query('SELECT parameters FROM policies WHERE id = $1', [id]);
+    if (result.rowCount === 0) {
+      return res.json({ success: true, comments: [] });
+    }
+
+    let params = result.rows[0].parameters;
+    if (typeof params === 'string') {
+      try { params = JSON.parse(params); } catch (_) {}
+    }
+
+    const comments = Array.isArray(params?.comments) ? params.comments : [];
+    res.json({ success: true, comments });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * POST /api/policies/:id/comments
+ * Persists a new document comment or task item into PostgreSQL DB.
+ */
+async function postPolicyComment(req, res, next) {
+  try {
+    const { id } = req.params;
+    const {
+      text,
+      author = 'Marcus Vance',
+      authorRole = 'Bank Administrator',
+      avatar = 'MV',
+      avatarColor = 'bg-blue-600',
+      isTask = false,
+      targetAssigneeId = null,
+      targetAssigneeName = null,
+      section_id = null
+    } = req.body;
+
+    if (!text || !text.trim()) {
+      return res.status(400).json({ error: 'Comment text cannot be empty' });
+    }
+
+    const curRes = await query('SELECT * FROM policies WHERE id = $1', [id]);
+    if (curRes.rowCount === 0) {
+      return res.status(404).json({ error: 'Policy not found' });
+    }
+    const policy = curRes.rows[0];
+
+    let params = policy.parameters;
+    if (typeof params === 'string') {
+      try { params = JSON.parse(params); } catch (_) {}
+    }
+    params = params || {};
+    const existingComments = Array.isArray(params.comments) ? params.comments : [];
+
+    let createdTaskId = null;
+    let taskCode = null;
+
+    // Create real task in tasks table if isTask or @mention
+    if (isTask) {
+      try {
+        const taskTitle = `[Task] ${text.replace(/@([a-zA-Z0-9_\s]+?)(?=\s|$|[.,!?])/g, '').trim().slice(0, 55)}`;
+        const insTask = await query(
+          `INSERT INTO tasks (title, description, category, created_from, library_id, section_id, created_by, assigned_to, status)
+           VALUES ($1, $2, 'general', 'task_pane', $3, $4, $5, $6, 'pending')
+           RETURNING id, task_code;`,
+          [taskTitle, text.trim(), id, section_id || `v${policy.version || '1.0'}`, author, targetAssigneeId || targetAssigneeName]
+        );
+        if (insTask.rowCount > 0) {
+          createdTaskId = insTask.rows[0].id;
+          taskCode = insTask.rows[0].task_code;
+        }
+      } catch (tErr) {
+        console.warn('Failed to insert task from comment:', tErr.message);
+      }
+    }
+
+    const newComment = {
+      id: `c-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      author,
+      authorRole,
+      avatar,
+      avatarColor,
+      text: text.trim(),
+      time: 'Just now',
+      likes: 0,
+      likedByMe: false,
+      isTask: Boolean(isTask),
+      taskId: createdTaskId,
+      taskCode: taskCode,
+      taskStatus: isTask ? 'pending' : null,
+      assignedTo: targetAssigneeName || targetAssigneeId || null,
+      assignedBy: author,
+      replies: [],
+      created_at: new Date().toISOString()
+    };
+
+    const updatedComments = [...existingComments, newComment];
+    params.comments = updatedComments;
+
+    await query(
+      `UPDATE policies SET parameters = $1::jsonb, updated_at = CURRENT_TIMESTAMP WHERE id = $2;`,
+      [JSON.stringify(params), id]
+    );
+
+    // Record in change logs
+    await query(
+      `INSERT INTO change_logs (entity_type, entity_id, user_name, action, section_name, details)
+       VALUES ('policy_comment', $1, $2, 'COMMENT_POSTED', $3, $4);`,
+      [id, author, section_id || 'General', text.trim()]
+    ).catch(() => {});
+
+    res.status(201).json({ success: true, comment: newComment });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * PUT /api/policies/:id/comments/:commentId/like
+ * Toggles like on a stored comment.
+ */
+async function toggleCommentLike(req, res, next) {
+  try {
+    const { id, commentId } = req.params;
+    const curRes = await query('SELECT parameters FROM policies WHERE id = $1', [id]);
+    if (curRes.rowCount === 0) return res.status(404).json({ error: 'Policy not found' });
+
+    let params = curRes.rows[0].parameters;
+    if (typeof params === 'string') {
+      try { params = JSON.parse(params); } catch (_) {}
+    }
+    params = params || {};
+    const comments = Array.isArray(params.comments) ? params.comments : [];
+
+    const updated = comments.map(c => {
+      if (c.id === commentId) {
+        const liked = !c.likedByMe;
+        return {
+          ...c,
+          likedByMe: liked,
+          likes: liked ? (c.likes || 0) + 1 : Math.max(0, (c.likes || 0) - 1)
+        };
+      }
+      return c;
+    });
+
+    params.comments = updated;
+    await query('UPDATE policies SET parameters = $1::jsonb WHERE id = $2', [JSON.stringify(params), id]);
+    res.json({ success: true, comments: updated });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * PUT /api/policies/:id/comments/:commentId/status
+ * Updates task status on a comment and synchronizes with tasks table.
+ */
+async function updateCommentTaskStatus(req, res, next) {
+  try {
+    const { id, commentId } = req.params;
+    const { status } = req.body;
+
+    const curRes = await query('SELECT parameters FROM policies WHERE id = $1', [id]);
+    if (curRes.rowCount === 0) return res.status(404).json({ error: 'Policy not found' });
+
+    let params = curRes.rows[0].parameters;
+    if (typeof params === 'string') {
+      try { params = JSON.parse(params); } catch (_) {}
+    }
+    params = params || {};
+    const comments = Array.isArray(params.comments) ? params.comments : [];
+
+    let linkedTaskId = null;
+    const updated = comments.map(c => {
+      if (c.id === commentId) {
+        linkedTaskId = c.taskId;
+        return { ...c, taskStatus: status };
+      }
+      return c;
+    });
+
+    params.comments = updated;
+    await query('UPDATE policies SET parameters = $1::jsonb WHERE id = $2', [JSON.stringify(params), id]);
+
+    if (linkedTaskId) {
+      const backendStatus = (status === 'resolved' || status === 'completed') ? 'completed' : status;
+      await query('UPDATE tasks SET status = $1, updated_at = NOW() WHERE id = $2', [backendStatus, linkedTaskId]).catch(() => {});
+    }
+
+    res.json({ success: true, comments: updated });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * POST /api/policies/:id/comments/:commentId/replies
+ * Adds a reply to a comment.
+ */
+async function postCommentReply(req, res, next) {
+  try {
+    const { id, commentId } = req.params;
+    const { text, author = 'Staff Officer', authorRole = 'Staff Officer', avatar = 'SO' } = req.body;
+
+    if (!text || !text.trim()) return res.status(400).json({ error: 'Reply text cannot be empty' });
+
+    const curRes = await query('SELECT parameters FROM policies WHERE id = $1', [id]);
+    if (curRes.rowCount === 0) return res.status(404).json({ error: 'Policy not found' });
+
+    let params = curRes.rows[0].parameters;
+    if (typeof params === 'string') {
+      try { params = JSON.parse(params); } catch (_) {}
+    }
+    params = params || {};
+    const comments = Array.isArray(params.comments) ? params.comments : [];
+
+    const replyObj = {
+      id: `rep-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      author,
+      authorRole,
+      avatar,
+      avatarColor: 'bg-blue-600',
+      text: text.trim(),
+      time: 'Just now',
+      likes: 0,
+      created_at: new Date().toISOString()
+    };
+
+    const updated = comments.map(c => {
+      if (c.id === commentId) {
+        return {
+          ...c,
+          replies: [...(c.replies || []), replyObj]
+        };
+      }
+      return c;
+    });
+
+    params.comments = updated;
+    await query('UPDATE policies SET parameters = $1::jsonb WHERE id = $2', [JSON.stringify(params), id]);
+    res.status(201).json({ success: true, reply: replyObj, comments: updated });
+  } catch (err) {
+    next(err);
+  }
+}
+
 module.exports = {
   getPolicies,
   getPolicyById,
@@ -511,5 +935,12 @@ module.exports = {
   togglePolicyMasking,
   deletePolicy,
   addContextualArtifact,
-  getContextualArtifacts
+  getContextualArtifacts,
+  getPolicyVersions,
+  restorePolicyVersion,
+  getPolicyComments,
+  postPolicyComment,
+  toggleCommentLike,
+  updateCommentTaskStatus,
+  postCommentReply
 };

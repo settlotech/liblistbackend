@@ -9,12 +9,31 @@ const {
   togglePolicyMasking,
   deletePolicy,
   addContextualArtifact,
-  getContextualArtifacts
+  getContextualArtifacts,
+  getPolicyVersions,
+  restorePolicyVersion,
+  getPolicyComments,
+  postPolicyComment,
+  toggleCommentLike,
+  updateCommentTaskStatus,
+  postCommentReply
 } = require('../controllers/policyController');
 const { roleGuard } = require('../middleware/roleGuard');
 
 // GET /api/policies - Lightweight list
 router.get('/policies', getPolicies);
+
+// Policy Version Control endpoints
+router.get('/policies/:id/versions', getPolicyVersions);
+router.post('/policies/:id/restore', restorePolicyVersion);
+router.post('/policies/:id/versions/:versionId/restore', restorePolicyVersion);
+
+// Policy Document Comments & Annotations (persisted in PostgreSQL DB)
+router.get('/policies/:id/comments', getPolicyComments);
+router.post('/policies/:id/comments', postPolicyComment);
+router.put('/policies/:id/comments/:commentId/like', toggleCommentLike);
+router.put('/policies/:id/comments/:commentId/status', updateCommentTaskStatus);
+router.post('/policies/:id/comments/:commentId/replies', postCommentReply);
 
 // GET /api/policies/:id - Full details + lazy load
 router.get('/policies/:id', getPolicyById);

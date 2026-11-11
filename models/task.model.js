@@ -12,19 +12,42 @@ const createTask = async (taskData) => {
         // Resolve assigned_to to a user in users table if needed
         let resolvedAssignee = null;
         if (assigned_to) {
+            const cleanTarget = String(assigned_to).trim();
+            const strippedName = cleanTarget.replace(/^u_cba_/i, '').replace(/_/g, ' ');
             const userCheck = await client.query(
-                `SELECT id FROM users WHERE id = $1 OR LOWER(name) = LOWER($1) OR LOWER(email) = LOWER($1) LIMIT 1`,
-                [assigned_to]
+                `SELECT id, name FROM users 
+                 WHERE id = $1 
+                    OR LOWER(name) = LOWER($1) 
+                    OR LOWER(name) = LOWER($2)
+                    OR LOWER(email) = LOWER($1)
+                    OR LOWER(email) LIKE LOWER($1 || '%')
+                 LIMIT 1`,
+                [cleanTarget, strippedName]
             );
             if (userCheck.rowCount > 0) {
                 resolvedAssignee = userCheck.rows[0].id;
             } else {
                 const looseCheck = await client.query(
-                    `SELECT id FROM users WHERE LOWER(name) LIKE $1 LIMIT 1`,
-                    [`%${assigned_to.toLowerCase()}%`]
+                    `SELECT id, name FROM users WHERE LOWER(name) LIKE $1 LIMIT 1`,
+                    [`%${strippedName.toLowerCase()}%`]
                 );
                 if (looseCheck.rowCount > 0) {
                     resolvedAssignee = looseCheck.rows[0].id;
+                } else {
+                    // Try to insert placeholder or fallback user if foreign key exists
+                    try {
+                        const fallbackName = strippedName.replace(/\b\w/g, l => l.toUpperCase());
+                        const insUser = await client.query(
+                            `INSERT INTO users (id, name, email, role, role_type, is_active)
+                             VALUES ($1, $2, $3, 'Bank Officer', 'employee', true)
+                             ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name
+                             RETURNING id`,
+                            [cleanTarget, fallbackName, `${cleanTarget.toLowerCase().replace(/[^a-z0-9]/g, '')}@cba.com.au`]
+                        );
+                        resolvedAssignee = insUser.rows[0].id;
+                    } catch (_) {
+                        resolvedAssignee = cleanTarget;
+                    }
                 }
             }
         }
@@ -32,9 +55,16 @@ const createTask = async (taskData) => {
         // Resolve created_by to a user in users table
         let resolvedCreator = created_by;
         if (created_by) {
+            const cleanCreator = String(created_by).trim();
+            const strippedCreator = cleanCreator.replace(/^u_cba_/i, '').replace(/_/g, ' ');
             const creatorCheck = await client.query(
-                `SELECT id FROM users WHERE id = $1 OR LOWER(name) = LOWER($1) OR LOWER(email) = LOWER($1) LIMIT 1`,
-                [created_by]
+                `SELECT id, name FROM users 
+                 WHERE id = $1 
+                    OR LOWER(name) = LOWER($1) 
+                    OR LOWER(name) = LOWER($2)
+                    OR LOWER(email) = LOWER($1)
+                 LIMIT 1`,
+                [cleanCreator, strippedCreator]
             );
             if (creatorCheck.rowCount > 0) {
                 resolvedCreator = creatorCheck.rows[0].id;
@@ -109,8 +139,8 @@ const getTasksForUser = async ({ userId, search = '', page = 1, limit = 20 }) =>
         base_tasks AS (
             SELECT
                 t.*,
-                cb.name  AS created_by_name,
-                at2.name AS assigned_to_name,
+                COALESCE(cb.name, t.created_by)   AS created_by_name,
+                COALESCE(at2.name, t.assigned_to) AS assigned_to_name,
                 CASE
                     WHEN t.id IN (SELECT task_id FROM user_pins) THEN 'pinned'
                     WHEN t.category = 'common'  THEN 'common'
@@ -120,8 +150,8 @@ const getTasksForUser = async ({ userId, search = '', page = 1, limit = 20 }) =>
                    FROM task_logs tl
                   WHERE tl.task_id = t.id) AS last_activity_at
             FROM tasks t
-            LEFT JOIN users cb  ON cb.id  = t.created_by
-            LEFT JOIN users at2 ON at2.id = t.assigned_to
+            LEFT JOIN users cb  ON (cb.id  = t.created_by  OR LOWER(cb.name)  = LOWER(t.created_by))
+            LEFT JOIN users at2 ON (at2.id = t.assigned_to OR LOWER(at2.name) = LOWER(t.assigned_to))
             WHERE
                 -- Common tasks: visible to all
                 t.category = 'common'
@@ -129,10 +159,15 @@ const getTasksForUser = async ({ userId, search = '', page = 1, limit = 20 }) =>
                 -- Pinned tasks for this user (regardless of category)
                 t.id IN (SELECT task_id FROM user_pins)
                 OR
-                -- Assigned or created (by ID or display name)
-                (t.created_by = $1 OR t.assigned_to = $1)
+                -- Assigned to this user (by ID, username, or display name)
+                (t.assigned_to = $1 OR LOWER(t.assigned_to) = LOWER($1))
                 OR
                 t.assigned_to IN (SELECT name FROM users WHERE id = $1)
+                OR
+                t.assigned_to IN (SELECT id FROM users WHERE LOWER(name) = LOWER($1) OR id = $1)
+                OR
+                -- Created by this user
+                (t.created_by = $1 OR LOWER(t.created_by) = LOWER($1))
                 OR
                 t.created_by IN (SELECT name FROM users WHERE id = $1)
                 OR
@@ -145,7 +180,7 @@ const getTasksForUser = async ({ userId, search = '', page = 1, limit = 20 }) =>
                 -- Bank Managers & Admins have full institutional oversight of all tasks
                 EXISTS (
                     SELECT 1 FROM users u
-                    WHERE u.id = $1 AND (u.role_type IN ('manager', 'admin') OR LOWER(u.role) LIKE '%admin%' OR LOWER(u.role) LIKE '%approver%' OR LOWER(u.role) LIKE '%owner%')
+                    WHERE (u.id = $1 OR LOWER(u.name) = LOWER($1)) AND (u.role_type IN ('manager', 'admin') OR LOWER(u.role) LIKE '%admin%' OR LOWER(u.role) LIKE '%approver%' OR LOWER(u.role) LIKE '%owner%')
                 )
         )
         SELECT *
@@ -168,8 +203,13 @@ const getTasksForUser = async ({ userId, search = '', page = 1, limit = 20 }) =>
         SELECT COUNT(*) FROM tasks t
         WHERE t.category = 'common'
            OR t.id IN (SELECT task_id FROM user_task_pins WHERE user_id = $1)
-           OR (t.category = 'general' AND (t.created_by = $1 OR t.assigned_to = $1))
-           OR EXISTS (SELECT 1 FROM task_participants tp WHERE tp.task_id = t.id AND tp.user_id = $1)
+           OR (t.assigned_to = $1 OR LOWER(t.assigned_to) = LOWER($1))
+           OR t.assigned_to IN (SELECT name FROM users WHERE id = $1)
+           OR t.assigned_to IN (SELECT id FROM users WHERE LOWER(name) = LOWER($1) OR id = $1)
+           OR (t.created_by = $1 OR LOWER(t.created_by) = LOWER($1))
+           OR t.created_by IN (SELECT name FROM users WHERE id = $1)
+           OR EXISTS (SELECT 1 FROM task_participants tp WHERE tp.task_id = t.id AND (tp.user_id = $1 OR tp.user_id IN (SELECT name FROM users WHERE id = $1)))
+           OR EXISTS (SELECT 1 FROM users u WHERE (u.id = $1 OR LOWER(u.name) = LOWER($1)) AND (u.role_type IN ('manager', 'admin') OR LOWER(u.role) LIKE '%admin%' OR LOWER(u.role) LIKE '%approver%' OR LOWER(u.role) LIKE '%owner%'))
     `;
 
     const [tasksResult, countResult] = await Promise.all([

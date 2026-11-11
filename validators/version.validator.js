@@ -1,26 +1,23 @@
 const { z } = require('zod');
 
-const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// Accepts valid UUID or standard string identifier (e.g. slug or system ID)
+const idString = z.string().min(1, 'Identifier cannot be empty');
 
 const uuidParamSchema = z.object({
-    id: z.string().regex(UUID_REGEX, 'Invalid UUID format'),
+    id: idString,
 }).passthrough();
 
 const documentIdParamSchema = z.object({
-    documentId: z.string().regex(UUID_REGEX, 'Invalid Document UUID format'),
+    documentId: idString,
 }).passthrough();
 
 const restoreParamsSchema = z.object({
-    documentId: z.string().regex(UUID_REGEX, 'Invalid Document UUID format'),
-    versionId: z.string().regex(UUID_REGEX, 'Invalid Version UUID format').optional(),
+    documentId: idString,
+    versionId: idString.optional(),
 }).passthrough();
 
 const commitDocumentSchema = z.object({
-    document_id: z
-        .string()
-        .regex(UUID_REGEX, 'document_id must be a valid UUID')
-        .optional()
-        .nullable(),
+    document_id: idString.optional().nullable(),
     commit_message: z
         .string({ required_error: 'commit_message is required' })
         .trim()
@@ -30,17 +27,13 @@ const commitDocumentSchema = z.object({
 });
 
 const compareVersionsQuerySchema = z.object({
-    v1: z
-        .string({ required_error: 'v1 (first version ID) is required' })
-        .regex(UUID_REGEX, 'v1 must be a valid UUID'),
-    v2: z
-        .string({ required_error: 'v2 (second version ID) is required' })
-        .regex(UUID_REGEX, 'v2 must be a valid UUID'),
+    v1: idString,
+    v2: idString,
 });
 
 const restoreVersionSchema = z.object({
-    version_id: z.string().regex(UUID_REGEX, 'Invalid version UUID').optional().nullable(),
-    versionId: z.string().regex(UUID_REGEX, 'Invalid version UUID').optional().nullable(),
+    version_id: idString.optional().nullable(),
+    versionId: idString.optional().nullable(),
     commit_message: z.string().trim().max(1000).optional().nullable(),
 }).passthrough();
 
