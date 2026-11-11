@@ -2,11 +2,48 @@ const pool = require('../config/db');
 
 
 const createTask = async (taskData) => {
-    const { title,description = null, category = 'general',library_id = null, section_id = null,created_by,assigned_to = null,participants = []} = taskData;
+    let { title, description = null, category = 'general', library_id = null, section_id = null, created_by, assigned_to = null, participants = [] } = taskData;
+    library_id = library_id || taskData.linked_policy_id || taskData.policy_id || null;
 
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
+
+        // Resolve assigned_to to a user in users table if needed
+        let resolvedAssignee = null;
+        if (assigned_to) {
+            const userCheck = await client.query(
+                `SELECT id FROM users WHERE id = $1 OR LOWER(name) = LOWER($1) OR LOWER(email) = LOWER($1) LIMIT 1`,
+                [assigned_to]
+            );
+            if (userCheck.rowCount > 0) {
+                resolvedAssignee = userCheck.rows[0].id;
+            } else {
+                const looseCheck = await client.query(
+                    `SELECT id FROM users WHERE LOWER(name) LIKE $1 LIMIT 1`,
+                    [`%${assigned_to.toLowerCase()}%`]
+                );
+                if (looseCheck.rowCount > 0) {
+                    resolvedAssignee = looseCheck.rows[0].id;
+                }
+            }
+        }
+
+        // Resolve created_by to a user in users table
+        let resolvedCreator = created_by;
+        if (created_by) {
+            const creatorCheck = await client.query(
+                `SELECT id FROM users WHERE id = $1 OR LOWER(name) = LOWER($1) OR LOWER(email) = LOWER($1) LIMIT 1`,
+                [created_by]
+            );
+            if (creatorCheck.rowCount > 0) {
+                resolvedCreator = creatorCheck.rows[0].id;
+            }
+        }
+        if (!resolvedCreator) {
+            const fallback = await client.query(`SELECT id FROM users LIMIT 1`);
+            if (fallback.rowCount > 0) resolvedCreator = fallback.rows[0].id;
+        }
 
         // 1. Insert task
         const taskResult = await client.query(
@@ -15,7 +52,7 @@ const createTask = async (taskData) => {
                  created_by, assigned_to, status)
              VALUES ($1, $2, $3, 'task_pane', $4, $5, $6, $7, 'pending')
              RETURNING *`,
-            [title, description, category, library_id, section_id, created_by, assigned_to]
+            [title, description, category, library_id, section_id, resolvedCreator, resolvedAssignee]
         );
         const task = taskResult.rows[0];
 
@@ -23,26 +60,31 @@ const createTask = async (taskData) => {
         await client.query(
             `INSERT INTO task_logs (task_id, action, performed_by, new_value)
              VALUES ($1, 'created', $2, $3)`,
-            [task.id, created_by, title]
+            [task.id, resolvedCreator, title]
         );
 
         // 3. Log initial assignment if provided
-        if (assigned_to) {
+        if (resolvedAssignee) {
             await client.query(
                 `INSERT INTO task_logs (task_id, action, performed_by, new_value)
                  VALUES ($1, 'assigned', $2, $3)`,
-                [task.id, created_by, assigned_to]
+                [task.id, resolvedCreator, resolvedAssignee]
             );
         }
 
         // 4. Insert participants
         for (const p of participants) {
-            await client.query(
-                `INSERT INTO task_participants (task_id, user_id, role)
-                 VALUES ($1, $2, $3)
-                 ON CONFLICT (task_id, user_id, role) DO NOTHING`,
-                [task.id, p.user_id, p.role]
-            );
+            let pUserId = p.user_id;
+            const pCheck = await client.query(`SELECT id FROM users WHERE id = $1 OR LOWER(name) = LOWER($1) LIMIT 1`, [pUserId]);
+            if (pCheck.rowCount > 0) {
+                pUserId = pCheck.rows[0].id;
+                await client.query(
+                    `INSERT INTO task_participants (task_id, user_id, role)
+                     VALUES ($1, $2, $3)
+                     ON CONFLICT (task_id, user_id, role) DO NOTHING`,
+                    [task.id, pUserId, p.role]
+                );
+            }
         }
 
         await client.query('COMMIT');
@@ -341,11 +383,12 @@ const reassignTask = async (taskId, newAssignedTo, performedBy) => {
 
 
 const VALID_STATUS_TRANSITIONS = {
-    pending:   ['responded', 'completed', 'cancelled'],
-    responded: ['completed', 'cancelled'],
-    completed: ['approved', 'cancelled'],
-    approved:  [],
-    cancelled: []
+    pending:   ['in_progress', 'responded', 'completed', 'cancelled'],
+    in_progress: ['responded', 'completed', 'cancelled', 'pending'],
+    responded: ['completed', 'cancelled', 'in_progress', 'pending'],
+    completed: ['approved', 'cancelled', 'pending', 'in_progress'],
+    approved:  ['pending', 'completed'],
+    cancelled: ['pending']
 };
 
 

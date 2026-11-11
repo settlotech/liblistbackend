@@ -35,6 +35,30 @@ const seedSuperAdmin = async () => {
             roleName: 'User',
             role: 'Bank Employee (Maker)',
             roleType: 'employee'
+        },
+        {
+            id: 'u_cba_david',
+            email: 'david.miller@cba.com.au',
+            name: 'David Miller',
+            roleName: 'User',
+            role: 'Credit Underwriter',
+            roleType: 'employee'
+        },
+        {
+            id: 'u_cba_settlo_lead',
+            email: 'compliance@cba.com.au',
+            name: 'Settlo Admin',
+            roleName: 'Admin',
+            role: 'APRA Compliance Lead',
+            roleType: 'admin'
+        },
+        {
+            id: 'u_cba_alex',
+            email: 'alex.morgan@cba.com.au',
+            name: 'Alex Morgan',
+            roleName: 'User',
+            role: 'Operations Squad Lead',
+            roleType: 'employee'
         }
     ];
 
