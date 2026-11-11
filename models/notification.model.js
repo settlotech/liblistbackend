@@ -55,7 +55,7 @@ const getUsersFcmTokens = async (userIds) => {
     const query = `
         SELECT user_id, fcm_token
         FROM user_fcm_tokens
-        WHERE user_id = ANY($1::uuid[])
+        WHERE user_id = ANY($1::text[])
         ORDER BY updated_at DESC;
     `;
     const result = await pool.query(query, [userIds]);

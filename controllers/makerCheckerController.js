@@ -170,6 +170,27 @@ async function actionMakerChecker(req, res, next) {
        item.department_name, `${item.policy_title}: ${action}d by ${checker_name}. Comments: ${comments}`]
     );
 
+    // Notify Maker in real-time
+    try {
+      const notificationService = require('../services/notification.service');
+      let makerId = 'u_cba_sarah';
+      const makerCheck = await query(`SELECT id FROM users WHERE LOWER(name) = LOWER($1) OR id = $1 LIMIT 1`, [item.maker_name]);
+      if (makerCheck.rowCount > 0) makerId = makerCheck.rows[0].id;
+
+      await notificationService.sendNotificationToSingle({
+        userId: makerId,
+        title: `Policy Change ${action === 'approve' ? 'Approved' : 'Rejected'}: ${item.policy_title}`,
+        body: `${checker_name} ${action}d your proposed changes for "${item.policy_title}". ${comments ? `Note: ${comments}` : ''}`,
+        data: {
+          policyId: item.policy_id,
+          type: 'maker_checker_decision'
+        },
+        clickAction: `/home?policy=${item.policy_id}`
+      });
+    } catch (notifErr) {
+      console.warn('[MakerChecker] Notification notice:', notifErr.message);
+    }
+
     res.json({ success: true, item: result.rows[0] });
   } catch (err) {
     next(err);

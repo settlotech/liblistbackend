@@ -254,6 +254,22 @@ async function updatePolicy(req, res, next) {
         [id, authorName, current.department_id, `Maker submitted amendments for '${current.title}'. Pending Manager sign-off.`]
       );
 
+      try {
+        const notificationService = require('../services/notification.service');
+        await notificationService.sendNotificationToSingle({
+          userId: 'u_cba_marcus',
+          title: `Governance Review: ${title || current.title}`,
+          body: `${authorName} submitted change proposal for "${title || current.title}". Pending Manager sign-off.`,
+          data: {
+            policyId: id,
+            type: 'maker_checker_submission'
+          },
+          clickAction: '/changelogs'
+        });
+      } catch (notifErr) {
+        console.warn('[PolicyController] Notification notice:', notifErr.message);
+      }
+
       return res.json({
         maker_checker: true,
         requestId: mcRes.rows[0].id,
