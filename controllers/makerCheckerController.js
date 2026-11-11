@@ -7,8 +7,12 @@ const { query } = require('../db');
  */
 async function getMakerCheckerItems(req, res, next) {
   try {
+    // Clean up any stray draft records that should not be in the maker-checker review queue
+    await query("DELETE FROM maker_checker_requests WHERE status = 'draft';").catch(() => {});
+
     const result = await query(`
       SELECT * FROM maker_checker_requests
+      WHERE status != 'draft'
       ORDER BY
         CASE WHEN status = 'pending' AND is_closed = FALSE THEN 0 ELSE 1 END,
         created_at DESC

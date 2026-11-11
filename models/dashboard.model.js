@@ -176,14 +176,15 @@ const getMakerCheckerAnalytics = async ({ departmentId }) => {
     `;
     const deptPendingRes = await pool.query(deptPendingQuery);
 
-    // 3. Recent 5 Maker-Checker items
+    // 3. Recent Maker-Checker review items (Strictly real reviews, never drafts)
     let recentQuery = `
         SELECT id, policy_title, department_name, maker_name, checker_name, status, created_at, reviewed_at
         FROM maker_checker_requests
+        WHERE status != 'draft'
     `;
     const recentParams = [];
     if (deptParam) {
-        recentQuery += ` WHERE (department_name = (SELECT name FROM departments WHERE id = $1 LIMIT 1) 
+        recentQuery += ` AND (department_name = (SELECT name FROM departments WHERE id = $1 LIMIT 1) 
                           OR policy_id IN (SELECT id FROM policies WHERE department_id = $1))`;
         recentParams.push(deptParam);
     }
