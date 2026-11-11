@@ -129,13 +129,23 @@ const getTasksForUser = async ({ userId, search = '', page = 1, limit = 20 }) =>
                 -- Pinned tasks for this user (regardless of category)
                 t.id IN (SELECT task_id FROM user_pins)
                 OR
-                -- General tasks: only own or assigned
-                (t.category = 'general' AND (t.created_by = $1 OR t.assigned_to = $1))
+                -- Assigned or created (by ID or display name)
+                (t.created_by = $1 OR t.assigned_to = $1)
                 OR
-                -- Tasks where user is a participant
+                t.assigned_to IN (SELECT name FROM users WHERE id = $1)
+                OR
+                t.created_by IN (SELECT name FROM users WHERE id = $1)
+                OR
+                -- Participant
                 EXISTS (
                     SELECT 1 FROM task_participants tp
-                    WHERE tp.task_id = t.id AND tp.user_id = $1
+                    WHERE tp.task_id = t.id AND (tp.user_id = $1 OR tp.user_id IN (SELECT name FROM users WHERE id = $1))
+                )
+                OR
+                -- Bank Managers & Admins have full institutional oversight of all tasks
+                EXISTS (
+                    SELECT 1 FROM users u
+                    WHERE u.id = $1 AND (u.role_type IN ('manager', 'admin') OR LOWER(u.role) LIKE '%admin%' OR LOWER(u.role) LIKE '%approver%' OR LOWER(u.role) LIKE '%owner%')
                 )
         )
         SELECT *
@@ -248,7 +258,31 @@ const getTaskById = async (taskId, userId) => {
          WHERE t.id = $1`,
         [taskId, userId]
     );
-    return result.rows[0] || null;
+    const task = result.rows[0];
+    if (!task) return null;
+
+    // Attach task audit logs
+    const logsRes = await pool.query(
+        `SELECT tl.*, u.name AS performed_by_name
+         FROM task_logs tl
+         LEFT JOIN users u ON u.id = tl.performed_by
+         WHERE tl.task_id = $1
+         ORDER BY tl.created_at ASC`,
+        [taskId]
+    );
+    task.logs = logsRes.rows || [];
+
+    // Attach task participants
+    const participantsRes = await pool.query(
+        `SELECT tp.*, u.name, u.email, u.role AS user_role
+         FROM task_participants tp
+         LEFT JOIN users u ON u.id = tp.user_id
+         WHERE tp.task_id = $1`,
+        [taskId]
+    );
+    task.participants = participantsRes.rows || [];
+
+    return task;
 };
 
 
