@@ -118,7 +118,21 @@ const createTask = async (taskData) => {
         }
 
         await client.query('COMMIT');
-        return task;
+        
+        // Fetch full task record with user names and linked document aliases
+        const fullTaskRes = await pool.query(
+            `SELECT t.*, 
+                    COALESCE(cb.name, t.created_by)   AS created_by_name,
+                    COALESCE(cb.name, t.created_by)   AS assigned_by,
+                    COALESCE(at2.name, t.assigned_to) AS assigned_to_name,
+                    t.library_id AS linked_policy_id
+             FROM tasks t
+             LEFT JOIN users cb  ON (cb.id  = t.created_by  OR LOWER(cb.name)  = LOWER(t.created_by))
+             LEFT JOIN users at2 ON (at2.id = t.assigned_to OR LOWER(at2.name) = LOWER(t.assigned_to))
+             WHERE t.id = $1`,
+            [task.id]
+        );
+        return fullTaskRes.rows[0] || task;
     } catch (err) {
         await client.query('ROLLBACK');
         throw err;
@@ -140,7 +154,9 @@ const getTasksForUser = async ({ userId, search = '', page = 1, limit = 20 }) =>
             SELECT
                 t.*,
                 COALESCE(cb.name, t.created_by)   AS created_by_name,
+                COALESCE(cb.name, t.created_by)   AS assigned_by,
                 COALESCE(at2.name, t.assigned_to) AS assigned_to_name,
+                t.library_id AS linked_policy_id,
                 CASE
                     WHEN t.id IN (SELECT task_id FROM user_pins) THEN 'pinned'
                     WHEN t.category = 'common'  THEN 'common'
@@ -231,7 +247,7 @@ const getCommonTasks = async ({ userId, search = '', page = 1, limit = 20 }) => 
     const searchParam = search ? `%${search}%` : null;
 
     const result = await pool.query(
-        `SELECT t.*, cb.name AS created_by_name, at2.name AS assigned_to_name
+        `SELECT t.*, cb.name AS created_by_name, cb.name AS assigned_by, at2.name AS assigned_to_name, t.library_id AS linked_policy_id
          FROM tasks t
          LEFT JOIN users cb  ON cb.id  = t.created_by
          LEFT JOIN users at2 ON at2.id = t.assigned_to
@@ -250,7 +266,7 @@ const getPinnedTasks = async ({ userId, search = '', page = 1, limit = 20 }) => 
     const searchParam = search ? `%${search}%` : null;
 
     const result = await pool.query(
-        `SELECT t.*, cb.name AS created_by_name, at2.name AS assigned_to_name, utp.pinned_at
+        `SELECT t.*, cb.name AS created_by_name, cb.name AS assigned_by, at2.name AS assigned_to_name, t.library_id AS linked_policy_id, utp.pinned_at
          FROM tasks t
          INNER JOIN user_task_pins utp ON utp.task_id = t.id AND utp.user_id = $1
          LEFT JOIN users cb  ON cb.id  = t.created_by
@@ -269,7 +285,7 @@ const getGeneralTasks = async ({ userId, search = '', page = 1, limit = 20 }) =>
     const searchParam = search ? `%${search}%` : null;
 
     const result = await pool.query(
-        `SELECT t.*, cb.name AS created_by_name, at2.name AS assigned_to_name
+        `SELECT t.*, cb.name AS created_by_name, cb.name AS assigned_by, at2.name AS assigned_to_name, t.library_id AS linked_policy_id
          FROM tasks t
          LEFT JOIN users cb  ON cb.id  = t.created_by
          LEFT JOIN users at2 ON at2.id = t.assigned_to
@@ -290,7 +306,9 @@ const getTaskById = async (taskId, userId) => {
         `SELECT
             t.*,
             cb.name  AS created_by_name,
+            cb.name  AS assigned_by,
             at2.name AS assigned_to_name,
+            t.library_id AS linked_policy_id,
             EXISTS(SELECT 1 FROM user_task_pins utp WHERE utp.task_id = t.id AND utp.user_id = $2) AS is_pinned
          FROM tasks t
          LEFT JOIN users cb  ON cb.id  = t.created_by
@@ -683,7 +701,7 @@ const isParticipantWithRole = async (taskId, userId, role) => {
 
 const getAssignableUsers = async () => {
     const result = await pool.query(
-        `SELECT id, name, email, is_active
+        `SELECT id, name, email, role, role_type, is_active
          FROM users
          WHERE is_active = TRUE
          ORDER BY name ASC`
