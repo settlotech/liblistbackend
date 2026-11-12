@@ -169,9 +169,6 @@ const getTasksForUser = async ({ userId, search = '', page = 1, limit = 20 }) =>
             LEFT JOIN users cb  ON (cb.id  = t.created_by  OR LOWER(cb.name)  = LOWER(t.created_by))
             LEFT JOIN users at2 ON (at2.id = t.assigned_to OR LOWER(at2.name) = LOWER(t.assigned_to))
             WHERE
-                -- Common tasks: visible to all
-                t.category = 'common'
-                OR
                 -- Pinned tasks for this user (regardless of category)
                 t.id IN (SELECT task_id FROM user_pins)
                 OR
@@ -217,8 +214,7 @@ const getTasksForUser = async ({ userId, search = '', page = 1, limit = 20 }) =>
 
     const countQuery = `
         SELECT COUNT(*) FROM tasks t
-        WHERE t.category = 'common'
-           OR t.id IN (SELECT task_id FROM user_task_pins WHERE user_id = $1)
+        WHERE t.id IN (SELECT task_id FROM user_task_pins WHERE user_id = $1)
            OR (t.assigned_to = $1 OR LOWER(t.assigned_to) = LOWER($1))
            OR t.assigned_to IN (SELECT name FROM users WHERE id = $1)
            OR t.assigned_to IN (SELECT id FROM users WHERE LOWER(name) = LOWER($1) OR id = $1)
