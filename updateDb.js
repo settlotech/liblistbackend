@@ -21,6 +21,43 @@ async function updateDb() {
 
     await query("UPDATE departments SET sort_order = 15 WHERE id = 'company-policies'");
 
+    
+    // Seed standard institutional policy template from docks/Template_policy.docx
+    const standardSections = JSON.stringify([
+      { id: 'sec-purpose', title: '1. Purpose', content: 'Purpose statement of the policy', type: 'section' },
+      { id: 'sec-scope', title: '2. Scope/Coverage', content: 'Applicability of the policy. It can be based on lines of business, geographical restrictions, customer segmentation etc', type: 'section' },
+      { id: 'sec-details', title: '3. Details/Description', content: 'Details of the policy is described in this section. It can cover multiple sections, tables, images', type: 'section' },
+      { id: 'sec-dependencies', title: '4. Pre-requisites /Dependencies', content: 'Explain cross references to the policies', type: 'section' },
+      { id: 'sec-controls', title: '5. Controls', content: 'This section describes key monitoring requirements. It can have a sub section for data quality', type: 'section' },
+      { id: 'sec-reporting', title: '6. Reporting', content: 'Define key metrics for continuous monitoring activities. It also defines the report layout, refer to the report id.', type: 'section' },
+      { id: 'sec-approval-chain', title: '7. Approval Chain', content: 'Provide the approval chain of this policy', type: 'section' }
+    ]);
+
+    await query(`
+      INSERT INTO policy_templates 
+        (id, name, title, department_id, summary, sla, daily_limit, officer_cap, sections, phases, is_active, created_by)
+      VALUES 
+        (
+          'template-standard-policy',
+          'Template 1',
+          'Policy Template',
+          'company-policies',
+          'Short description of the policy',
+          '4 Hours',
+          '$25,000 AUD',
+          '$100,000 AUD',
+          $1,
+          '[]'::jsonb,
+          TRUE,
+          'System Standard'
+        )
+      ON CONFLICT (id) DO UPDATE 
+        SET title = EXCLUDED.title,
+            summary = EXCLUDED.summary,
+            sections = EXCLUDED.sections,
+            is_active = TRUE;
+    `, [standardSections]);
+
     // 2. Structured Policies (with phases-wise data, PDF templates, and role drafts)
     const policies = [
       // ----------------- 1. CREDIT CARDS LIBRARY -----------------

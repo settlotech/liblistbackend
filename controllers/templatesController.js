@@ -1,5 +1,76 @@
 const { query } = require('../db');
 
+const DEFAULT_POLICY_TEMPLATES = [
+  {
+    id: 'template-standard-policy',
+    name: 'Template 1',
+    title: 'Policy Template',
+    department_id: 'company-policies',
+    summary: 'Short description of the policy',
+    sla: '4 Hours',
+    daily_limit: '$25,000 AUD',
+    officer_cap: '$100,000 AUD',
+    sections: [
+      {
+        id: 'sec-purpose',
+        title: '1. Purpose',
+        content: 'Purpose statement of the policy',
+        type: 'section'
+      },
+      {
+        id: 'sec-scope',
+        title: '2. Scope/Coverage',
+        content: 'Applicability of the policy. It can be based on lines of business, geographical restrictions, customer segmentation etc',
+        type: 'section'
+      },
+      {
+        id: 'sec-details',
+        title: '3. Details/Description',
+        content: 'Details of the policy is described in this section. It can cover multiple sections, tables, images',
+        type: 'section'
+      },
+      {
+        id: 'sec-dependencies',
+        title: '4. Pre-requisites /Dependencies',
+        content: 'Explain cross references to the policies',
+        type: 'section'
+      },
+      {
+        id: 'sec-controls',
+        title: '5. Controls',
+        content: 'This section describes key monitoring requirements. It can have a sub section for data quality',
+        type: 'section'
+      },
+      {
+        id: 'sec-reporting',
+        title: '6. Reporting',
+        content: 'Define key metrics for continuous monitoring activities. It also defines the report layout, refer to the report id.',
+        type: 'section'
+      },
+      {
+        id: 'sec-approval-chain',
+        title: '7. Approval Chain',
+        content: 'Provide the approval chain of this policy',
+        type: 'section'
+      }
+    ]
+  },
+  {
+    id: 'template-02-exec',
+    name: 'Template 2',
+    title: 'Executive Summary',
+    department_id: 'company-policies',
+    summary: 'Executive governance charter setting forth board-level mandates and delegated authorities.',
+    sla: '24 Hours',
+    daily_limit: '$100,000 AUD',
+    officer_cap: '$500,000 AUD',
+    sections: [
+      { id: 'sec-exec-1', title: '1. Executive Summary & Statutory Purpose', content: 'Outlines statutory intent under APRA CPS 230.' }
+    ]
+  }
+];
+
+
 /**
  * GET /api/templates
  * Returns all dynamic policy starter templates.
@@ -18,9 +89,16 @@ async function getTemplates(req, res, next) {
     sql += ' ORDER BY created_at ASC;';
 
     const result = await query(sql, params);
-    res.json(result.rows);
+    if (result.rows && result.rows.length > 0) {
+      // Ensure standard template is always present and at top
+      const hasStandard = result.rows.some(r => r.id === 'template-standard-policy' || r.id === 'template-01-pdf');
+      const finalTemplates = hasStandard ? result.rows : [DEFAULT_POLICY_TEMPLATES[0], ...result.rows];
+      return res.json(finalTemplates);
+    }
+    res.json(DEFAULT_POLICY_TEMPLATES);
   } catch (err) {
-    next(err);
+    console.warn('DB error in getTemplates, using default fallback templates:', err.message);
+    res.json(DEFAULT_POLICY_TEMPLATES);
   }
 }
 
