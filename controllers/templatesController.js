@@ -2,9 +2,9 @@ const { query } = require('../db');
 
 const DEFAULT_POLICY_TEMPLATES = [
   {
-    id: 'template-standard-policy',
-    name: 'Template 1',
-    title: 'Policy Template',
+    id: 'template-01-pdf',
+    name: 'Policy Template',
+    title: 'Policy Title',
     department_id: 'company-policies',
     summary: 'Short description of the policy',
     sla: '4 Hours',
@@ -13,43 +13,43 @@ const DEFAULT_POLICY_TEMPLATES = [
     sections: [
       {
         id: 'sec-purpose',
-        title: '1. Purpose',
+        title: 'Purpose',
         content: 'Purpose statement of the policy',
         type: 'section'
       },
       {
         id: 'sec-scope',
-        title: '2. Scope/Coverage',
+        title: 'Scope/Coverage',
         content: 'Applicability of the policy. It can be based on lines of business, geographical restrictions, customer segmentation etc',
         type: 'section'
       },
       {
         id: 'sec-details',
-        title: '3. Details/Description',
+        title: 'Details/Description',
         content: 'Details of the policy is described in this section. It can cover multiple sections, tables, images',
         type: 'section'
       },
       {
         id: 'sec-dependencies',
-        title: '4. Pre-requisites /Dependencies',
+        title: 'Pre-requisites /Dependencies',
         content: 'Explain cross references to the policies',
         type: 'section'
       },
       {
         id: 'sec-controls',
-        title: '5. Controls',
+        title: 'Controls',
         content: 'This section describes key monitoring requirements. It can have a sub section for data quality',
         type: 'section'
       },
       {
         id: 'sec-reporting',
-        title: '6. Reporting',
+        title: 'Reporting',
         content: 'Define key metrics for continuous monitoring activities. It also defines the report layout, refer to the report id.',
         type: 'section'
       },
       {
         id: 'sec-approval-chain',
-        title: '7. Approval Chain',
+        title: 'Approval Chain',
         content: 'Provide the approval chain of this policy',
         type: 'section'
       }
@@ -90,10 +90,10 @@ async function getTemplates(req, res, next) {
 
     const result = await query(sql, params);
     if (result.rows && result.rows.length > 0) {
-      // Ensure standard template is always present and at top
-      const hasStandard = result.rows.some(r => r.id === 'template-standard-policy' || r.id === 'template-01-pdf');
-      const finalTemplates = hasStandard ? result.rows : [DEFAULT_POLICY_TEMPLATES[0], ...result.rows];
-      return res.json(finalTemplates);
+      // Filter out any older duplicate standard templates from DB rows
+      const otherRows = result.rows.filter(r => r.id !== 'template-standard-policy' && r.id !== 'template-01-pdf');
+      // Guarantee institutional Policy Template with 7 sections is always index 0
+      return res.json([DEFAULT_POLICY_TEMPLATES[0], ...otherRows]);
     }
     res.json(DEFAULT_POLICY_TEMPLATES);
   } catch (err) {
