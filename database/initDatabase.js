@@ -146,6 +146,10 @@ const initDatabase = async () => {
         }
 
         await seedSuperAdmin();
+
+        const { ensureUserNotesTable } = require('../models/userNote.model');
+        await ensureUserNotesTable();
+        console.log('User notes & annotations table ready');
     } catch (error) {
         console.error('Database initialization failed:', error);
         throw error;

@@ -64,10 +64,102 @@ function extractPdfStreamsText(buffer) {
 }
 
 /**
- * Robust text extractor for uploaded PDF, DOCX, and TXT files
+ * Zero-dependency pure Node.js DOCX Buffer Extractor
+ * Extracts document XML text and media assets (images) from DOCX zip structures.
+ */
+function parseDocxBuffer(buffer) {
+  try {
+    const files = {};
+    let eocd = -1;
+    for (let i = buffer.length - 22; i >= Math.max(0, buffer.length - 65557); i--) {
+      if (buffer.readUInt32LE(i) === 0x06054b50) {
+        eocd = i;
+        break;
+      }
+    }
+
+    if (eocd >= 0) {
+      const cdOffset = buffer.readUInt32LE(eocd + 16);
+      const cdCount = buffer.readUInt16LE(eocd + 10);
+      let cur = cdOffset;
+
+      for (let i = 0; i < cdCount && cur < buffer.length - 46; i++) {
+        if (buffer.readUInt32LE(cur) !== 0x02014b50) break;
+        const compMethod = buffer.readUInt16LE(cur + 10);
+        const compSize = buffer.readUInt32LE(cur + 20);
+        const nameLen = buffer.readUInt16LE(cur + 28);
+        const extraLen = buffer.readUInt16LE(cur + 30);
+        const commentLen = buffer.readUInt16LE(cur + 32);
+        const localOffset = buffer.readUInt32LE(cur + 42);
+
+        if (cur + 46 + nameLen <= buffer.length) {
+          const name = buffer.toString('utf8', cur + 46, cur + 46 + nameLen);
+          if (localOffset + 30 <= buffer.length && buffer.readUInt32LE(localOffset) === 0x04034b50) {
+            const localNameLen = buffer.readUInt16LE(localOffset + 26);
+            const localExtraLen = buffer.readUInt16LE(localOffset + 28);
+            const dataStart = localOffset + 30 + localNameLen + localExtraLen;
+
+            if (compSize > 0 && dataStart + compSize <= buffer.length) {
+              const compData = buffer.subarray(dataStart, dataStart + compSize);
+              let data = null;
+              try {
+                if (compMethod === 0) data = compData;
+                else if (compMethod === 8) data = zlib.inflateRawSync(compData);
+              } catch (e) {}
+              if (data) files[name] = data;
+            }
+          }
+        }
+        cur += 46 + nameLen + extraLen + commentLen;
+      }
+    }
+
+    let text = '';
+    if (files['word/document.xml']) {
+      const xml = files['word/document.xml'].toString('utf8');
+      const paras = xml.match(/<w:p[\s>][\s\S]*?<\/w:p>/g) || [];
+      text = paras.map(p => {
+        const texts = (p.match(/<w:t[\s>][\s\S]*?<\/w:t>/g) || []).map(t => t.replace(/<[^>]+>/g, ''));
+        return texts.join('');
+      }).filter(t => t.trim().length > 0).join('\n\n');
+    }
+
+    const images = [];
+    for (const [name, data] of Object.entries(files)) {
+      if (name.startsWith('word/media/')) {
+        const ext = name.split('.').pop().toLowerCase();
+        const mime = ext === 'png' ? 'image/png' : ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : ext === 'gif' ? 'image/gif' : ext === 'svg' ? 'image/svg+xml' : 'application/octet-stream';
+        images.push({
+          name: name.replace('word/media/', ''),
+          mimeType: mime,
+          dataUrl: `data:${mime};base64,${data.toString('base64')}`,
+          size: data.length
+        });
+      }
+    }
+
+    return { text, images };
+  } catch (err) {
+    console.warn('DOCX extraction error, falling back to text string:', err.message);
+    return { text: buffer.toString('utf-8'), images: [] };
+  }
+}
+
+/**
+ * Robust text and asset extractor for uploaded PDF, DOCX, and TXT files
  */
 async function extractTextFromUploadFile(file) {
   const isPdf = file.mimetype === 'application/pdf' || file.originalname.toLowerCase().endsWith('.pdf');
+  const isDocx = file.mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+                 file.originalname.toLowerCase().endsWith('.docx') ||
+                 (!isPdf && file.buffer && file.buffer.length > 4 && file.buffer.readUInt32LE(0) === 0x04034b50);
+
+  if (isDocx) {
+    const docxResult = parseDocxBuffer(file.buffer);
+    if (docxResult && docxResult.text && docxResult.text.trim().length > 0) {
+      return docxResult;
+    }
+  }
 
   if (isPdf) {
     try {
@@ -78,12 +170,12 @@ async function extractTextFromUploadFile(file) {
         const res = await parser.getText();
         const text = typeof res === 'string' ? res : (res?.text || '');
         if (text && text.trim().length > 50 && !text.trim().startsWith('%PDF-')) {
-          return text.trim();
+          return { text: text.trim(), images: [] };
         }
       } else if (typeof pdfModule === 'function') {
         const pdfData = await pdfModule(file.buffer);
         if (pdfData && pdfData.text && pdfData.text.trim().length > 50 && !pdfData.text.trim().startsWith('%PDF-')) {
-          return pdfData.text.trim();
+          return { text: pdfData.text.trim(), images: [] };
         }
       }
     } catch (e) {
@@ -92,11 +184,12 @@ async function extractTextFromUploadFile(file) {
 
     const streamText = extractPdfStreamsText(file.buffer);
     if (streamText && streamText.length > 50) {
-      return streamText;
+      return { text: streamText, images: [] };
     }
 
     // Curated high-fidelity fallback for Australian Banking Home Loan Valuations
-    return `Home Loan Valuations Policy
+    return {
+      text: `Home Loan Valuations Policy
 Phase 1: Valuation Ordering & Automation Matrix
 - Valuation types: Automated Valuation Model (AVM), Desktop Assessment, Full Physical Inspection.
 - Low-risk criteria: LVR <= 80%, property value <= $1.5M AUD in metropolitan areas.
@@ -111,11 +204,13 @@ Phase 2: Panel Valuer Accreditation & Quality Assurance
 Phase 3: Valuation Acceptance & Overwrite Thresholds
 - Credit officer approval cap: $50,000 variance override by Senior Credit Assessor.
 - Executive sign-off: Head of Credit Underwriting sign-off required for properties > $3.0M AUD.
-- Document archiving: Final valuation reports retained in immutable DMS for APRA APS 220 audit trail.`;
+- Document archiving: Final valuation reports retained in immutable DMS for APRA APS 220 audit trail.`,
+      images: []
+    };
   }
 
-  // Non-PDF files: read as UTF-8
-  return file.buffer.toString('utf-8');
+  // Non-PDF, Non-DOCX files: read as UTF-8
+  return { text: file.buffer.toString('utf-8'), images: [] };
 }
 
 /**
@@ -123,17 +218,30 @@ Phase 3: Valuation Acceptance & Overwrite Thresholds
  */
 async function ingestDocuments(req, res, next) {
   try {
-    const { department_id, user_role = 'employee', user_name = 'Staff Submitter' } = req.body;
+    const { department_id, template_id, template_sections, user_role = 'employee', user_name = 'Staff Submitter' } = req.body;
+    let parsedTemplateSections = null;
+    if (template_sections) {
+      try {
+        const parsed = typeof template_sections === 'string' ? JSON.parse(template_sections) : template_sections;
+        if (Array.isArray(parsed) && parsed.length > 0) parsedTemplateSections = parsed;
+      } catch (_) {}
+    }
     let documentsToProcess = [];
 
     // 1. Multipart upload
     if (req.files && req.files.length > 0) {
       for (const file of req.files) {
-        const textContent = await extractTextFromUploadFile(file);
+        let extraction = await extractTextFromUploadFile(file);
+        if ((!extraction.text || extraction.text.trim().length < 50) && req.body.raw_text && req.body.raw_text.trim().length > 50) {
+          extraction.text = req.body.raw_text.trim();
+        }
         documentsToProcess.push({
           name: file.originalname,
-          content: textContent,
-          departmentId: department_id
+          content: typeof extraction === 'string' ? extraction : extraction.text,
+          images: extraction.images || [],
+          departmentId: department_id,
+          templateId: template_id,
+          templateSections: parsedTemplateSections
         });
       }
     } 
@@ -142,18 +250,23 @@ async function ingestDocuments(req, res, next) {
       documentsToProcess = req.body.documents.map(d => ({
         name: d.name || 'uploaded_policy.txt',
         content: d.content || '',
-        departmentId: d.departmentId || department_id
+        images: d.images || [],
+        departmentId: d.departmentId || department_id,
+        templateId: d.templateId || template_id,
+        templateSections: d.templateSections || parsedTemplateSections
       }));
     } else {
       return res.status(400).json({ error: 'No files or documents provided for ingestion.' });
     }
 
-    const ingestionResult = await parseAndIngestMultipleDocuments(documentsToProcess);
+    const ingestionResult = await parseAndIngestMultipleDocuments(documentsToProcess, department_id, template_id);
 
     // Auto-persist each successfully parsed document to policies table
     const savedPolicies = [];
-    if (ingestionResult && ingestionResult.documents && ingestionResult.documents.length > 0) {
-      for (const doc of ingestionResult.documents) {
+    const docList = (ingestionResult && ingestionResult.documents) ? ingestionResult.documents : (Array.isArray(ingestionResult) ? ingestionResult : []);
+
+    if (docList.length > 0) {
+      for (const doc of docList) {
         try {
           const docDept = doc.suggested_department || department_id || 'company-policies';
           const docSections = doc.sections || [];
@@ -190,7 +303,8 @@ async function ingestDocuments(req, res, next) {
             compliance_tags: doc.compliance_tags || ['APRA Aligned', 'Internal Standard'],
             mandatory_dvs: true,
             sections: docSections,
-            phases: phases
+            phases: phases,
+            images: doc.images || []
           };
 
           const insertRes = await query(
@@ -233,7 +347,9 @@ async function ingestDocuments(req, res, next) {
     }
 
     res.json({
-      ...ingestionResult,
+      success: true,
+      total_processed: docList.length,
+      documents: docList,
       saved_policies: savedPolicies
     });
   } catch (err) {
@@ -261,4 +377,3 @@ module.exports = {
   ingestDocuments,
   ragQuery
 };
-

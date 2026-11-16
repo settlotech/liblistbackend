@@ -21,7 +21,7 @@ app.use(cors({
     origin: true,
     credentials: true,
     methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE'],
-    allowedHeaders: ['Content-Type', 'Authorization']
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-User-Id']
 }));
 
 // Body parser
@@ -51,6 +51,7 @@ const metricsRouter = require('./routes/metrics');
 const templatesRouter = require('./routes/templates');
 
 const taskModuleRouter = require('./routes/task.routes');
+const userNotesRouter = require('./routes/userNotes.routes');
 const aiRouter = require('./routes/ai');
 const vectorsRouter = require('./routes/vectors');
 const notificationRoutes = require('./routes/notification.route');
@@ -130,6 +131,7 @@ app.use('/api', templatesRouter);
 
 // New Task Management Module for Demo Purpose 
 app.use('/api', taskModuleRouter);
+app.use('/api', userNotesRouter);
 
 app.use('/api', aiRouter);
 app.use('/api', vectorsRouter); 

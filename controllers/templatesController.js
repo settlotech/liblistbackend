@@ -15,43 +15,50 @@ const DEFAULT_POLICY_TEMPLATES = [
         id: 'sec-purpose',
         title: 'Purpose',
         content: 'Purpose statement of the policy',
-        type: 'section'
+        type: 'section',
+        isTemplateSection: true
       },
       {
         id: 'sec-scope',
         title: 'Scope/Coverage',
         content: 'Applicability of the policy. It can be based on lines of business, geographical restrictions, customer segmentation etc',
-        type: 'section'
+        type: 'section',
+        isTemplateSection: true
       },
       {
         id: 'sec-details',
         title: 'Details/Description',
         content: 'Details of the policy is described in this section. It can cover multiple sections, tables, images',
-        type: 'section'
+        type: 'section',
+        isTemplateSection: true
       },
       {
         id: 'sec-dependencies',
         title: 'Pre-requisites /Dependencies',
         content: 'Explain cross references to the policies',
-        type: 'section'
+        type: 'section',
+        isTemplateSection: true
       },
       {
         id: 'sec-controls',
         title: 'Controls',
         content: 'This section describes key monitoring requirements. It can have a sub section for data quality',
-        type: 'section'
+        type: 'section',
+        isTemplateSection: true
       },
       {
         id: 'sec-reporting',
         title: 'Reporting',
         content: 'Define key metrics for continuous monitoring activities. It also defines the report layout, refer to the report id.',
-        type: 'section'
+        type: 'section',
+        isTemplateSection: true
       },
       {
         id: 'sec-approval-chain',
         title: 'Approval Chain',
         content: 'Provide the approval chain of this policy',
-        type: 'section'
+        type: 'section',
+        isTemplateSection: true
       }
     ]
   },
