@@ -126,18 +126,41 @@ const findAll = async ({
     user_id = null,
     isSuperAdmin = false,
     canApprove = false,
+    isChangeManagement = false,
     limit = 50,
     offset = 0,
 } = {}) => {
     const conditions = ['d.deleted_at IS NULL', 'l.deleted_at IS NULL', "d.status != 'suspended'"];
     const values = [];
 
-    // Change Management Rule: If user is not Super Admin and does not have approval permissions,
-    // they load only their own authored/revised policies or active policies.
-    if (!isSuperAdmin && !canApprove && user_id) {
+    // ── Policy Access Control: Can View Check ──
+    // If a policy has can_view = FALSE explicitly configured for this user in policy_user_access,
+    // they MUST NOT see or access this policy in the Master Library tree, search, or document lists.
+    if (!isSuperAdmin && user_id) {
         values.push(user_id);
-        const uIdx = values.length;
-        conditions.push(`(d.created_by = $${uIdx} OR d.requested_by = $${uIdx} OR d.pending_revision_by = $${uIdx} OR d.status IN ('active', 'approved'))`);
+        const puaIdx = values.length;
+        conditions.push(`NOT EXISTS (
+            SELECT 1 FROM document_management.policy_user_access pua
+            WHERE pua.document_id = d.id AND pua.user_id = $${puaIdx} AND pua.can_view = FALSE
+        )`);
+    }
+
+    if (isChangeManagement) {
+        // Change Management Scope: Except Super Admin, users only see policies they authored or are revising
+        if (!isSuperAdmin && user_id) {
+            values.push(user_id);
+            const uIdx = values.length;
+            conditions.push(`(d.created_by = $${uIdx} OR d.requested_by = $${uIdx} OR d.pending_revision_by = $${uIdx})`);
+        }
+    } else {
+        // General / Master Library Tree Scope:
+        // Super Admin & Approvers see all.
+        // Other users see all published active/approved policies PLUS their own drafts/revisions.
+        if (!isSuperAdmin && !canApprove && user_id) {
+            values.push(user_id);
+            const uIdx = values.length;
+            conditions.push(`(d.created_by = $${uIdx} OR d.requested_by = $${uIdx} OR d.pending_revision_by = $${uIdx} OR d.status IN ('active', 'approved'))`);
+        }
     }
 
     if (library_id) {
@@ -186,6 +209,12 @@ const findAll = async ({
       v.version_number AS current_version_number,
       v.commit_hash AS current_commit_hash,
       pv.version_number AS pending_version_number,
+      pv.parent_version_id AS pending_revision_parent_version_id,
+      lv.version_number AS live_version_number,
+      lv.commit_message AS live_version_commit_message,
+      COALESCE(parent_v.version_number, lv.version_number) AS parent_version_number,
+      COALESCE(parent_v.commit_message, lv.commit_message) AS parent_commit_message,
+      COALESCE(pv.parent_version_id, v.parent_version_id, d.live_version_id) AS parent_version_id,
       (SELECT COUNT(*)::int FROM document_management.document_sections s WHERE s.document_id = d.id AND s.deleted_at IS NULL) AS section_count,
       (SELECT COUNT(*)::int FROM document_management.document_versions ver WHERE ver.document_id = d.id) AS version_count
     FROM document_management.documents d
@@ -194,6 +223,8 @@ const findAll = async ({
     LEFT JOIN public.users u_app ON d.approved_by = u_app.id
     LEFT JOIN document_management.document_versions v ON COALESCE(d.live_version_id, d.current_version_id) = v.id
     LEFT JOIN document_management.document_versions pv ON d.pending_revision_id = pv.id
+    LEFT JOIN document_management.document_versions lv ON d.live_version_id = lv.id
+    LEFT JOIN document_management.document_versions parent_v ON COALESCE(pv.parent_version_id, v.parent_version_id, d.live_version_id) = parent_v.id
     ${whereClause}
     ORDER BY d.updated_at DESC
     LIMIT ${limitParam} OFFSET ${offsetParam};

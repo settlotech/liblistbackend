@@ -6,9 +6,7 @@ require('dotenv').config();
 const GROQ_API_KEY = process.env.GROQ_API_KEY || process.env.GROK_API;
 const GROQ_MODEL = process.env.GROQ_MODEL || 'llama-3.3-70b-versatile';
 
-/**
- * Extract raw text, HTML structure, and embedded images from uploaded files
- */
+ 
 const extractRawTextFromFile = async (buffer, mimeType, originalName = '') => {
     const lowerName = (originalName || '').toLowerCase();
 
@@ -101,9 +99,7 @@ const extractRawTextFromFile = async (buffer, mimeType, originalName = '') => {
     };
 };
 
-/**
- * Call Groq Cloud LLM to extract full text, tables, bullet points, and figures
- */
+ 
 const transformTextWithTemplate = async (rawText, template, useTemplate = true, extractedImages = []) => {
     if (!GROQ_API_KEY) {
         throw new Error('Groq API Key (GROQ_API_KEY or GROK_API) is not configured in backend .env');
@@ -117,15 +113,15 @@ CRITICAL EXTRACTION REQUIREMENTS (PRESERVE ALL CONTENT, TABLES, POINTS & FIGURES
 1. TABLES (MANDATORY HTML <table>):
    - You MUST detect all tables, tabular data, authority matrices, approval matrices, and criteria schedules (such as "Valuation Table", "Attributes Criteria", "Credit Approval Authority Matrix", etc.).
    - Format each table in clean semantic HTML:
-     <table class="editor-table" style="width: 100%; border-collapse: collapse; margin: 16px 0;">
+     <table class='editor-table' style='width: 100%; border-collapse: collapse; margin: 16px 0;'>
        <thead>
-         <tr style="background-color: #f1f5f9;">
-           <th style="border: 1px solid #cbd5e1; padding: 8px 12px; font-weight: 600; text-align: left;">Column Header</th>
+         <tr style='background-color: #f1f5f9;'>
+           <th style='border: 1px solid #cbd5e1; padding: 8px 12px; font-weight: 600; text-align: left;'>Column Header</th>
          </tr>
        </thead>
        <tbody>
          <tr>
-           <td style="border: 1px solid #cbd5e1; padding: 8px 12px;">Cell Content</td>
+           <td style='border: 1px solid #cbd5e1; padding: 8px 12px;'>Cell Content</td>
          </tr>
        </tbody>
      </table>
@@ -140,19 +136,17 @@ CRITICAL EXTRACTION REQUIREMENTS (PRESERVE ALL CONTENT, TABLES, POINTS & FIGURES
 
 3. IMAGES & FIGURES:
    - If the document references a figure, chart, diagram, or sample report (e.g. "Figure 1: Sample Report"), include:
-     <figure style="margin: 20px 0; text-align: center;">
+       <figure style='margin: 20px 0; text-align: center;'>
        {{IMAGE_FIGURE_1}}
-       <figcaption style="font-size: 12px; color: #64748b; margin-top: 6px; font-style: italic;">Figure: Sample Report</figcaption>
+       <figcaption style='font-size: 12px; color: #64748b; margin-top: 6px; font-style: italic;'>Figure: Sample Report</figcaption>
      </figure>
 
 4. COMPLETENESS (NO SUMMARIZATION):
    - Extract ALL policy provisions, requirements, thresholds, criteria, exceptions, and RACI roles completely.
    - Do NOT summarize or shorten detailed operational clauses.
 
-5. PAGE BREAKS (WORD & PDF STYLE):
-   - For multi-page documents (PDF / Word), insert a clean page break between document pages or major sections:
-     <div data-type="page-break" class="document-page-break"></div>
-   - Page breaks must sit strictly between discrete blocks (never inside a table row or across headings).
+5. PAGINATION:
+   - Do NOT output page-break elements, page-break labels, or manual page-break markup. The editor paginates content automatically.
 `;
 
     if (useTemplate && template) {
@@ -211,7 +205,7 @@ RULES:
     }
   ]
 }
-No conversational text, no markdown codeblocks, only pure JSON.`;
+For HTML inside JSON string values, use single-quoted HTML attributes (for example, <table class='editor-table'>). Do not place backslash escapes before HTML attribute quotes. Return valid JSON with no conversational text or markdown code fences.`;
 
         userPrompt = `Source Document Raw Text:
 ${rawText.slice(0, 35000)}
@@ -251,7 +245,7 @@ RULES:
     }
   ]
 }
-No conversational text, no markdown codeblocks, only pure JSON.`;
+For HTML inside JSON string values, use single-quoted HTML attributes (for example, <table class='editor-table'>). Do not place backslash escapes before HTML attribute quotes. Return valid JSON with no conversational text or markdown code fences.`;
 
         userPrompt = `Source Document Raw Text:
 ${rawText.slice(0, 35000)}
@@ -288,7 +282,23 @@ Extract the document's native sections, headings, bullet points, and tables in t
                 res.on('data', (chunk) => (data += chunk));
                 res.on('end', () => {
                     if (res.statusCode >= 400) {
-                        return reject(new Error(`Groq API Error (${res.statusCode}): ${data}`));
+                        let providerError = null;
+                        try {
+                            providerError = JSON.parse(data)?.error;
+                        } catch (_) {
+                            // Keep the raw response out of the user-facing error.
+                        }
+
+                        console.error('Groq extraction request failed:', {
+                            statusCode: res.statusCode,
+                            code: providerError?.code,
+                            message: providerError?.message,
+                        });
+
+                        const message = providerError?.code === 'json_validate_failed'
+                            ? 'The AI could not format the extracted document. Please retry extraction.'
+                            : providerError?.message || 'The AI extraction service rejected the request.';
+                        return reject(new Error(`Groq API Error (${res.statusCode}): ${message}`));
                     }
                     try {
                         const parsed = JSON.parse(data);

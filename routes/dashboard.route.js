@@ -205,4 +205,193 @@ router.get('/activity-timeline', async (req, res, next) => {
     }
 });
 
+
+// ── Dashboard: Change Management Widget ──
+// Returns role/user-based "Saved Drafts" and "In Review" lists
+router.get('/change-management', async (req, res, next) => {
+    try {
+        const userId = req.user?.id;
+        const isSuperAdmin = req.user?.isSuperAdmin === true ||
+            (req.user?.role || '').toLowerCase() === 'super admin' ||
+            (req.user?.role || '').toLowerCase() === 'super_admin' ||
+            (Array.isArray(req.user?.roles) && req.user.roles.some(r => {
+                const name = (typeof r === 'string' ? r : r.role_name || '').toLowerCase();
+                return name === 'super admin' || name === 'super_admin';
+            }));
+
+        const canApprove = isSuperAdmin ||
+            (Array.isArray(req.user?.permissionStrings) && req.user.permissionStrings.includes('documents:approval')) ||
+            (Array.isArray(req.user?.permissions) && req.user.permissions.includes('documents:approval'));
+
+        let savedDrafts = [];
+        let inReview = [];
+        let draftTotal = 0;
+        let inReviewTotal = 0;
+
+        if (isSuperAdmin || canApprove) {
+            // ── SUPER ADMIN / APPROVER: See all system-wide drafts and in-review items ──
+            const draftsRes = await pool.query(`
+                SELECT
+                    d.id,
+                    d.document_name,
+                    d.status,
+                    d.has_pending_revision,
+                    d.revision_status,
+                    d.pending_revision_version,
+                    v.version_number AS current_version_number,
+                    d.updated_at,
+                    l.library_name,
+                    COALESCE(u.name, u2.name) AS author_name
+                FROM document_management.documents d
+                LEFT JOIN document_management.libraries l ON d.library_id = l.id
+                LEFT JOIN public.users u ON d.requested_by = u.id
+                LEFT JOIN public.users u2 ON d.created_by = u2.id
+                LEFT JOIN document_management.document_versions v ON COALESCE(d.live_version_id, d.current_version_id) = v.id
+                WHERE d.deleted_at IS NULL
+                  AND (
+                    d.status = 'draft'
+                    OR (d.has_pending_revision = TRUE AND d.revision_status = 'draft')
+                  )
+                ORDER BY d.updated_at DESC
+                LIMIT 20
+            `).catch(() => ({ rows: [] }));
+
+            const inReviewRes = await pool.query(`
+                SELECT
+                    d.id,
+                    d.document_name,
+                    d.status,
+                    d.has_pending_revision,
+                    d.revision_status,
+                    d.pending_revision_version,
+                    v.version_number AS current_version_number,
+                    d.updated_at,
+                    l.library_name,
+                    COALESCE(u.name, u2.name) AS author_name
+                FROM document_management.documents d
+                LEFT JOIN document_management.libraries l ON d.library_id = l.id
+                LEFT JOIN public.users u ON d.requested_by = u.id
+                LEFT JOIN public.users u2 ON d.created_by = u2.id
+                LEFT JOIN document_management.document_versions v ON COALESCE(d.live_version_id, d.current_version_id) = v.id
+                WHERE d.deleted_at IS NULL
+                  AND (
+                    d.status IN ('pending', 'in_review')
+                    OR (d.has_pending_revision = TRUE AND d.revision_status = 'pending_review')
+                  )
+                ORDER BY d.updated_at DESC
+                LIMIT 20
+            `).catch(() => ({ rows: [] }));
+
+            // Count totals
+            const draftCountRes = await pool.query(`
+                SELECT COUNT(*)::int AS total FROM document_management.documents
+                WHERE deleted_at IS NULL
+                  AND (status = 'draft' OR (has_pending_revision = TRUE AND revision_status = 'draft'))
+            `).catch(() => ({ rows: [{ total: 0 }] }));
+
+            const inReviewCountRes = await pool.query(`
+                SELECT COUNT(*)::int AS total FROM document_management.documents
+                WHERE deleted_at IS NULL
+                  AND (status IN ('pending','in_review') OR (has_pending_revision = TRUE AND revision_status = 'pending_review'))
+            `).catch(() => ({ rows: [{ total: 0 }] }));
+
+            savedDrafts = draftsRes.rows;
+            inReview = inReviewRes.rows;
+            draftTotal = draftCountRes.rows[0]?.total ?? 0;
+            inReviewTotal = inReviewCountRes.rows[0]?.total ?? 0;
+
+        } else {
+            // ── REGULAR USER: See only their own drafts and in-review items ──
+            const draftsRes = await pool.query(`
+                SELECT
+                    d.id,
+                    d.document_name,
+                    d.status,
+                    d.has_pending_revision,
+                    d.revision_status,
+                    d.pending_revision_version,
+                    v.version_number AS current_version_number,
+                    d.updated_at,
+                    l.library_name,
+                    COALESCE(u.name, u2.name) AS author_name
+                FROM document_management.documents d
+                LEFT JOIN document_management.libraries l ON d.library_id = l.id
+                LEFT JOIN public.users u ON d.requested_by = u.id
+                LEFT JOIN public.users u2 ON d.created_by = u2.id
+                LEFT JOIN document_management.document_versions v ON COALESCE(d.live_version_id, d.current_version_id) = v.id
+                WHERE d.deleted_at IS NULL
+                  AND (d.created_by = $1 OR d.requested_by = $1 OR d.pending_revision_by = $1)
+                  AND (
+                    d.status = 'draft'
+                    OR (d.has_pending_revision = TRUE AND d.revision_status = 'draft')
+                  )
+                ORDER BY d.updated_at DESC
+                LIMIT 20
+            `, [userId]).catch(() => ({ rows: [] }));
+
+            const inReviewRes = await pool.query(`
+                SELECT
+                    d.id,
+                    d.document_name,
+                    d.status,
+                    d.has_pending_revision,
+                    d.revision_status,
+                    d.pending_revision_version,
+                    v.version_number AS current_version_number,
+                    d.updated_at,
+                    l.library_name,
+                    COALESCE(u.name, u2.name) AS author_name
+                FROM document_management.documents d
+                LEFT JOIN document_management.libraries l ON d.library_id = l.id
+                LEFT JOIN public.users u ON d.requested_by = u.id
+                LEFT JOIN public.users u2 ON d.created_by = u2.id
+                LEFT JOIN document_management.document_versions v ON COALESCE(d.live_version_id, d.current_version_id) = v.id
+                WHERE d.deleted_at IS NULL
+                  AND (d.created_by = $1 OR d.requested_by = $1 OR d.pending_revision_by = $1)
+                  AND (
+                    d.status IN ('pending', 'in_review')
+                    OR (d.has_pending_revision = TRUE AND d.revision_status = 'pending_review')
+                  )
+                ORDER BY d.updated_at DESC
+                LIMIT 20
+            `, [userId]).catch(() => ({ rows: [] }));
+
+            const draftCountRes = await pool.query(`
+                SELECT COUNT(*)::int AS total FROM document_management.documents
+                WHERE deleted_at IS NULL
+                  AND (created_by = $1 OR requested_by = $1 OR pending_revision_by = $1)
+                  AND (status = 'draft' OR (has_pending_revision = TRUE AND revision_status = 'draft'))
+            `, [userId]).catch(() => ({ rows: [{ total: 0 }] }));
+
+            const inReviewCountRes = await pool.query(`
+                SELECT COUNT(*)::int AS total FROM document_management.documents
+                WHERE deleted_at IS NULL
+                  AND (created_by = $1 OR requested_by = $1 OR pending_revision_by = $1)
+                  AND (status IN ('pending','in_review') OR (has_pending_revision = TRUE AND revision_status = 'pending_review'))
+            `, [userId]).catch(() => ({ rows: [{ total: 0 }] }));
+
+            savedDrafts = draftsRes.rows;
+            inReview = inReviewRes.rows;
+            draftTotal = draftCountRes.rows[0]?.total ?? 0;
+            inReviewTotal = inReviewCountRes.rows[0]?.total ?? 0;
+        }
+
+        res.status(200).json({
+            success: true,
+            message: 'Change management data retrieved successfully',
+            data: {
+                isSuperAdmin,
+                canApprove,
+                savedDrafts,
+                inReview,
+                draftTotal,
+                inReviewTotal,
+            }
+        });
+    } catch (err) {
+        next(err);
+    }
+});
+
 module.exports = router;
+

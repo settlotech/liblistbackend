@@ -237,14 +237,48 @@ const sendNotificationToMany = async ({
 
  
 const sendNotification = async (options) => {
+    if (options.allUsers) {
+        return sendNotificationToAll(options);
+    }
     if (Array.isArray(options.userIds) && options.userIds.length > 0) {
         return sendNotificationToMany(options);
     }
     return sendNotificationToSingle(options);
 };
 
+/**
+ * Broadcast notification to all active users in the system (e.g. new policy published, new template live)
+ */
+const sendNotificationToAll = async ({
+    title,
+    body,
+    data = {},
+    imageUrl,
+    clickAction = '/home',
+    excludeUserId = null,
+}) => {
+    try {
+        const userIds = await notificationModel.getAllActiveUserIds(excludeUserId);
+        if (!userIds || userIds.length === 0) {
+            return { success: true, recipientsCount: 0 };
+        }
+        return await sendNotificationToMany({
+            userIds,
+            title,
+            body,
+            data,
+            imageUrl,
+            clickAction,
+        });
+    } catch (err) {
+        console.error('[Notification:All] Failed to broadcast notification:', err.message);
+        return { success: false, error: err.message };
+    }
+};
+
 module.exports = {
     sendNotificationToSingle,
     sendNotificationToMany,
+    sendNotificationToAll,
     sendNotification,
 };

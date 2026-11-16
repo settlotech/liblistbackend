@@ -14,9 +14,20 @@ app.use(helmet({
     crossOriginEmbedderPolicy: false
 }));
 
-// CORS
+// CORS: explicitly allow configured frontend origins.
+const allowedOrigins = (process.env.CORS_ORIGINS || [
+    process.env.CLIENT_URL,
+    process.env.NODE_ENV !== 'production' ? 'http://localhost:5173' : null,
+    process.env.NODE_ENV !== 'production' ? 'http://127.0.0.1:5173' : null,
+].filter(Boolean).join(','))
+    .split(',')
+    .map(origin => origin.trim())
+    .filter(Boolean);
 app.use(cors({
-    origin: true,
+    origin(origin, callback) {
+        if (!origin) return callback(null, true);
+        return callback(null, allowedOrigins.includes(origin));
+    },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE']
 }));
@@ -92,7 +103,11 @@ const startServer = async () => {
         console.log('PostgreSQL connected successfully!');
         client.release();
 
-        await initializeDatabase();
+        if (process.env.RUN_DB_INIT_ON_STARTUP === 'true') {
+            await initializeDatabase();
+        } else {
+            console.log('Skipping database schema initialization; set RUN_DB_INIT_ON_STARTUP=true to run it explicitly.');
+        }
 
         app.listen(PORT, () => {
             console.log(`API running on http://localhost:${PORT}`);

@@ -141,6 +141,24 @@ const deleteNotification = async (notificationId, userId) => {
     return result.rowCount > 0;
 };
 
+/**
+ * Fetch all active user IDs in the platform (for system-wide broadcast notifications)
+ */
+const getAllActiveUserIds = async (excludeUserId = null) => {
+    let query = `SELECT id FROM public.users WHERE is_active = TRUE`;
+    const params = [];
+    if (excludeUserId) {
+        params.push(excludeUserId);
+        query += ` AND id != $1`;
+    }
+    const result = await pool.query(query, params);
+    return result.rows.map((r) => r.id);
+};
+
+// Compatibility wrappers in case caller imports from model instead of service
+const sendNotificationToSingle = (...args) => require('../services/notification.service').sendNotificationToSingle(...args);
+const sendNotificationToMany = (...args) => require('../services/notification.service').sendNotificationToMany(...args);
+
 module.exports = {
     saveFcmToken,
     removeFcmToken,
@@ -153,4 +171,7 @@ module.exports = {
     markAsRead,
     markAllAsRead,
     deleteNotification,
+    getAllActiveUserIds,
+    sendNotificationToSingle,
+    sendNotificationToMany,
 };

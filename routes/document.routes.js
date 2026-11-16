@@ -57,10 +57,10 @@ const {
 
 const router = Router();
 
-router.get('/search', validate(documentSearchSchema, 'query'), searchDocuments);
+router.get('/search', authenticate, validate(documentSearchSchema, 'query'), searchDocuments);
 router.post('/', authenticate, createDocument);
 router.get('/', authenticate, validate(documentQuerySchema, 'query'), getAllDocuments);
-router.get('/library/:libraryId', validate(libraryIdParamSchema, 'params'), validate(documentQuerySchema, 'query'), getDocumentsByLibrary);
+router.get('/library/:libraryId', authenticate, validate(libraryIdParamSchema, 'params'), validate(documentQuerySchema, 'query'), getDocumentsByLibrary);
 
 // User-Centric Policy Access Controls — MUST be before /:id to avoid "user-access" being treated as an id
 router.get('/user-access/:userId', authenticate, checkPermission('policy_access', 'read'), getUserPolicyAccessList);

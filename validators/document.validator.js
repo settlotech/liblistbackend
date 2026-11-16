@@ -53,7 +53,9 @@ const documentQuerySchema = z.object({
     document_type: z.string().trim().optional(),
     search: z.string().trim().optional(),
     page: z.coerce.number().int().positive().default(1),
-    limit: z.coerce.number().int().positive().max(100).default(20),
+    limit: z.coerce.number().int().positive().max(1000).default(20),
+    scope: z.string().trim().optional(),
+    for_change_management: z.union([z.boolean(), z.string()]).optional(),
 });
 
 const documentSearchSchema = z.object({

@@ -4,7 +4,7 @@ const { sendSuccess } = require('../utils/response');
 const templateModel = require('../models/template.model');
 const documentModel = require('../models/document.model');
 const rbacModel = require('../models/rbac.model');
-const { sendNotificationToMany, sendNotificationToSingle } = require('../services/notification.service');
+const { sendNotificationToMany, sendNotificationToSingle, sendNotificationToAll } = require('../services/notification.service');
 
 /* ─── Helper: is user Super Admin or Admin ─────────────────── */
 const isAdminUser = (user) =>
@@ -15,14 +15,15 @@ const isAdminUser = (user) =>
     });
 
 /* ─── Notify all users with templates:approval permission ─── */
-const notifyApprovers = async ({ templateName, submitterName, templateId }) => {
+const notifyApprovers = async ({ templateName, submitterName, templateId, submitterId }) => {
     try {
         const approverIds = await rbacModel.getUsersWithPermission('templates', 'approval');
-        if (!approverIds.length) return;
+        const targetApproverIds = approverIds.filter(id => id !== submitterId);
+        if (!targetApproverIds.length) return;
 
         await sendNotificationToMany({
-            userIds: approverIds,
-            title: 'Template Awaiting Approval',
+            userIds: targetApproverIds,
+            title: '📋 New Template Submitted for Review',
             body: `${submitterName || 'A user'} submitted "${templateName}" for approval.`,
             data: {
                 type: 'template_approval_request',
@@ -32,7 +33,7 @@ const notifyApprovers = async ({ templateName, submitterName, templateId }) => {
             clickAction: '/templates',
         });
 
-        console.log(`Approval notification sent to ${approverIds.length} approver(s) for template "${templateName}"`);
+        console.log(`Approval notification sent to ${targetApproverIds.length} approver(s) for template "${templateName}"`);
     } catch (err) {
         // Non-fatal — template is already created
         console.error('Failed to send approver notifications:', err.message);
@@ -110,6 +111,7 @@ const createTemplate = asyncHandler(async (req, res) => {
                 templateName:  template_name,
                 submitterName: user?.name || user?.email,
                 templateId:    template.id,
+                submitterId:   user?.id,
             });
 
             if (user?.id) {
@@ -219,17 +221,37 @@ const reviewTemplate = asyncHandler(async (req, res) => {
         rejection_reason: action === 'reject' ? rejection_reason : null,
     });
 
-    // Notify the submitter (non-blocking)
-    if (template.requested_by) {
-        setImmediate(() =>
-            notifySubmitter({
-                userId:          template.requested_by,
-                templateName:    template.template_name,
-                action,
-                rejectionReason: rejection_reason,
-            })
-        );
-    }
+    // ── Dispatch notifications ───────────────────────────────────────────────
+    setImmediate(async () => {
+        try {
+            // 1. Notify the submitter: "Your template was approved" or "Your template was rejected"
+            const submitterId = template.requested_by || template.created_by;
+            if (submitterId) {
+                await notifySubmitter({
+                    userId:          submitterId,
+                    templateName:    template.template_name,
+                    action,
+                    rejectionReason: rejection_reason,
+                });
+            }
+
+            // 2. When approved: broadcast to ALL active users that a new template is live
+            if (action === 'approve') {
+                await sendNotificationToAll({
+                    title: `📢 New Template Live: ${template.template_name}`,
+                    body: `Template "${template.template_name}" (${template.category || 'General'}) is now approved and available in Template Management.`,
+                    data: {
+                        type: 'template_live',
+                        template_id: id,
+                        clickAction: '/templates',
+                    },
+                    clickAction: '/templates',
+                }).catch(err => console.error('[Template] Failed to broadcast live template notification:', err.message));
+            }
+        } catch (notifErr) {
+            console.error('[Template] Review notification dispatch error:', notifErr.message);
+        }
+    });
 
     return sendSuccess(res, `Template ${action}d successfully.`, updated);
 });

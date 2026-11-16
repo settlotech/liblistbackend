@@ -7,15 +7,17 @@ const documentModel = require('../models/document.model');
 // GET /my-annotations (all notes/annotations created by current user)
 const getMyAnnotations = asyncHandler(async (req, res) => {
     const userId = req.user?.id;
-    const { annotation_type, category, search } = req.query;
+    const { annotation_type, category, search, page = 1, limit = 20 } = req.query;
 
     const list = await annotationModel.findByUser(userId, {
         annotation_type: annotation_type || null,
         category: category || null,
         search: search || null,
+        page,
+        limit,
     });
 
-    return sendSuccess(res, 'User annotations retrieved successfully', list);
+    return sendSuccess(res, 'User annotations retrieved successfully', list.items, 200, list.pagination);
 });
 
 // GET /documents/:id/annotations

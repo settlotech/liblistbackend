@@ -3,7 +3,7 @@ const AppError = require('../utils/appError');
 const { sendSuccess } = require('../utils/response');
 const libraryModel = require('../models/library.model');
 const activityModel = require('../models/activity.model');
-const { sendNotificationToMany, sendNotificationToSingle } = require('../models/notification.model');
+const { sendNotificationToMany, sendNotificationToSingle } = require('../services/notification.service');
 const rbacModel = require('../models/rbac.model');
 const pool = require('../config/db');
 

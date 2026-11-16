@@ -37,7 +37,7 @@ const assignTaskSchema = z.object({
 }).strict();
 
 const statusUpdateSchema = z.object({
-    status: z.enum(['responded', 'completed', 'approved', 'cancelled']),
+    status: z.enum(['responded', 'completed', 'approved', 'reassigned', 'cancelled']),
     comment: z.string().trim().max(1000).optional().nullable()
 }).strict();
 
@@ -54,7 +54,7 @@ const addCommentSchema = z.object({
 const validate = (schema) => (req, res, next) => {
     const result = schema.safeParse(req.body);
     if (!result.success) {
-        const errors = result.error.errors.map(e => ({
+        const errors = (result.error.issues || result.error.errors || []).map(e => ({
             field: e.path.join('.'),
             message: e.message
         }));

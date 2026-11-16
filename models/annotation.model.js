@@ -80,7 +80,7 @@ const findByDocument = async (documentId, { version_id = null, category = null, 
     return res.rows;
 };
 
-const findByUser = async (userId, { annotation_type = null, category = null, search = null } = {}) => {
+const findByUser = async (userId, { annotation_type = null, category = null, search = null, page = 1, limit = 20 } = {}) => {
     let text = `
         SELECT 
             a.*,
@@ -109,9 +109,15 @@ const findByUser = async (userId, { annotation_type = null, category = null, sea
         text += ` AND (LOWER(a.annotation_text) LIKE $${params.length} OR LOWER(a.label) LIKE $${params.length} OR LOWER(d.document_name) LIKE $${params.length})`;
     }
 
-    text += ` ORDER BY a.created_at DESC;`;
+    const countText = text.replace(/SELECT[\s\S]*?FROM document_management\.document_annotations a/, 'SELECT COUNT(*)::int AS total FROM document_management.document_annotations a').replace(/\s+ORDER BY a\.created_at DESC;?$/, '');
+    const countRes = await query(countText, params);
+    const total = countRes.rows[0]?.total || 0;
+    const safePage = Math.max(1, Number(page) || 1);
+    const safeLimit = Math.min(100, Math.max(1, Number(limit) || 20));
+    params.push(safeLimit, (safePage - 1) * safeLimit);
+    text += ` ORDER BY a.created_at DESC LIMIT $${params.length - 1} OFFSET $${params.length};`;
     const res = await query(text, params);
-    return res.rows;
+    return { items: res.rows, pagination: { page: safePage, limit: safeLimit, total, totalPages: Math.ceil(total / safeLimit) } };
 };
 
 const findById = async (id) => {

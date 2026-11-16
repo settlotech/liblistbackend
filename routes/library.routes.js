@@ -25,13 +25,13 @@ const router = Router();
 
 // Static routes FIRST before /:id parameter matching
 router.post('/', authenticate, validate(createLibrarySchema, 'body'), createLibrary);
-router.get('/', validate(libraryQuerySchema, 'query'), getAllLibraries);
-router.get('/hierarchy', getLibraryHierarchy);
+router.get('/', authenticate, validate(libraryQuerySchema, 'query'), getAllLibraries);
+router.get('/hierarchy', authenticate, getLibraryHierarchy);
 router.get('/pending-removals', authenticate, getPendingLibraryRemovals);
-router.get('/:id/hierarchy', validate(uuidParamSchema, 'params'), getLibraryHierarchy);
+router.get('/:id/hierarchy', authenticate, validate(uuidParamSchema, 'params'), getLibraryHierarchy);
 
 // Parameterized routes SECOND
-router.get('/:id', validate(uuidParamSchema, 'params'), getLibraryById);
+router.get('/:id', authenticate, validate(uuidParamSchema, 'params'), getLibraryById);
 router.post('/:id/request-removal', authenticate, validate(uuidParamSchema, 'params'), requestLibraryRemoval);
 router.patch('/:id/review-removal', authenticate, validate(uuidParamSchema, 'params'), reviewLibraryRemoval);
 router.put('/:id', authenticate, validate(uuidParamSchema, 'params'), validate(updateLibrarySchema, 'body'), updateLibrary);

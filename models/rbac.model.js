@@ -231,7 +231,8 @@ const getUsersWithPermission = async (moduleName, operationName) => {
         LEFT JOIN operations o ON o.id = rp.operation_id
         WHERE
             -- Super Admin gets everything
-            LOWER(r.role_name) = 'super admin'
+            LOWER(r.role_name) IN ('super admin', 'super_admin')
+            OR r.id = 1
             OR (
                 LOWER(m.module_name) = LOWER($1)
                 AND LOWER(o.operation_name) = LOWER($2)

@@ -4,7 +4,7 @@ const { sendSuccess } = require('../utils/response');
 const documentModel = require('../models/document.model');
 const libraryModel = require('../models/library.model');
 const activityModel = require('../models/activity.model');
-const { sendNotificationToMany, sendNotificationToSingle } = require('../models/notification.model');
+const { sendNotificationToMany, sendNotificationToSingle, sendNotificationToAll } = require('../services/notification.service');
 const rbacModel = require('../models/rbac.model');
 const templateModel = require('../models/template.model');
 const aiExtractionService = require('../services/aiExtraction.service');
@@ -51,18 +51,17 @@ const createDocument = asyncHandler(async (req, res) => {
         actor_id: userId,
     });
 
-    // Notify Super Admins & Confirm to Author
+    // Notify Approvers (Super Admins + Users with approval in Permission Matrix) & Confirm to Author
     setImmediate(async () => {
         try {
-            const superAdmins = await rbacModel.getUsersWithPermission('documents', 'approval').catch(() => []);
-            const saRes = await pool.query("SELECT user_id AS id FROM public.user_roles WHERE role_id = 1");
-            const saIds = Array.from(new Set([...superAdmins, ...saRes.rows.map(r => r.id)])).filter(id => id !== userId);
+            const approvers = await rbacModel.getUsersWithPermission('documents', 'approval').catch(() => []);
+            const approverIds = approvers.filter(id => id !== userId);
 
-            if (saIds.length > 0) {
+            if (approverIds.length > 0) {
                 await sendNotificationToMany({
-                    userIds: saIds,
-                    title: '📋 New Policy Draft Submitted',
-                    body: `${user?.name || 'A user'} submitted "${document.document_name}" for Super Admin review.`,
+                    userIds: approverIds,
+                    title: 'New Policy Submitted for Review',
+                    body: `${user?.name || 'A user'} submitted "${document.document_name}" for review and approval.`,
                     data: {
                         type: 'policy_draft_submitted',
                         document_id: document.id,
@@ -75,8 +74,8 @@ const createDocument = asyncHandler(async (req, res) => {
             if (userId) {
                 await sendNotificationToSingle({
                     userId,
-                    title: '💾 Policy Draft Saved',
-                    body: `Your operational policy "${document.document_name}" has been saved as draft and submitted for Super Admin review.`,
+                    title: 'Policy Draft Submitted',
+                    body: `Your operational policy "${document.document_name}" has been saved as draft and submitted for review.`,
                     data: {
                         type: 'policy_draft_saved',
                         document_id: document.id,
@@ -95,10 +94,24 @@ const createDocument = asyncHandler(async (req, res) => {
 
 const getDocumentById = asyncHandler(async (req, res) => {
     const { id } = req.params;
+    const user = req.user;
+    const isSuperAdmin = user?.isSuperAdmin || (user?.roles || []).some(r => {
+        const name = typeof r === 'string' ? r : r.role_name;
+        return name?.toLowerCase() === 'super admin';
+    });
+
     const document = await documentModel.findById(id);
 
     if (!document) {
         throw new AppError('Document not found.', 404);
+    }
+
+    if (!isSuperAdmin && user?.id) {
+        const specificAccess = await documentModel.getPolicyUserAccess(id);
+        const userGrant = specificAccess.find(a => a.user_id === user.id);
+        if (userGrant && userGrant.can_view === false) {
+            throw new AppError('You do not have permission to view this policy.', 403);
+        }
     }
 
     if (req.user?.id) {
@@ -118,8 +131,10 @@ const getAllDocuments = asyncHandler(async (req, res) => {
     });
     const canApprove = isSuperAdmin || (user?.permissions || []).includes('documents:approval');
 
-    const { library_id, status, document_type, search, page = 1, limit = 50 } = req.query;
+    const { library_id, status, document_type, search, page = 1, limit = 50, scope, for_change_management } = req.query;
     const offset = (page - 1) * limit;
+
+    const isChangeManagement = scope === 'change_management' || for_change_management === true || for_change_management === 'true';
 
     const { documents, total } = await documentModel.findAll({
         library_id,
@@ -129,6 +144,7 @@ const getAllDocuments = asyncHandler(async (req, res) => {
         user_id: user?.id,
         isSuperAdmin,
         canApprove,
+        isChangeManagement,
         limit,
         offset,
     });
@@ -146,6 +162,12 @@ const getAllDocuments = asyncHandler(async (req, res) => {
 const getDocumentsByLibrary = asyncHandler(async (req, res) => {
     const { id: libraryId } = req.params;
     const { status, document_type, search, page = 1, limit = 20 } = req.query;
+    const user = req.user;
+    const isSuperAdmin = user?.isSuperAdmin || (user?.roles || []).some(r => {
+        const name = typeof r === 'string' ? r : r.role_name;
+        return name?.toLowerCase() === 'super admin';
+    });
+    const canApprove = isSuperAdmin || (user?.permissions || []).includes('documents:approval');
 
     const library = await libraryModel.findById(libraryId);
     if (!library) {
@@ -159,6 +181,9 @@ const getDocumentsByLibrary = asyncHandler(async (req, res) => {
         status,
         document_type,
         search,
+        user_id: user?.id,
+        isSuperAdmin,
+        canApprove,
         limit,
         offset,
     });
@@ -254,12 +279,21 @@ const moveDocument = asyncHandler(async (req, res) => {
 
 const searchDocuments = asyncHandler(async (req, res) => {
     const { q, library_id, page = 1, limit = 20 } = req.query;
+    const user = req.user;
+    const isSuperAdmin = user?.isSuperAdmin || (user?.roles || []).some(r => {
+        const name = typeof r === 'string' ? r : r.role_name;
+        return name?.toLowerCase() === 'super admin';
+    });
+    const canApprove = isSuperAdmin || (user?.permissions || []).includes('documents:approval');
     const offset = (page - 1) * limit;
 
     const { documents, total } = await documentModel.findAll({
         search: q,
         library_id,
         status: 'all',
+        user_id: user?.id,
+        isSuperAdmin,
+        canApprove,
         limit,
         offset,
     });
@@ -288,6 +322,10 @@ const getDocumentMetadata = asyncHandler(async (req, res) => {
         throw new AppError('Document not found.', 404);
     }
 
+    if (!isSuperAdmin && metadata.can_view === false) {
+        throw new AppError('You do not have permission to view this policy.', 403);
+    }
+
     return sendSuccess(res, 'Document metadata retrieved successfully', metadata);
 });
 
@@ -314,12 +352,13 @@ const reviewDocument = asyncHandler(async (req, res) => {
     const document = await documentModel.findById(id);
     if (!document) throw new AppError('Document not found.', 404);
 
+    let updatedDoc;
+
     // On approval: promote revision snapshot to active live version
     if (action === 'approve') {
-        const approvedDoc = await documentModel.approveRevision(id, user.id, {
+        updatedDoc = await documentModel.approveRevision(id, user.id, {
             commit_message: commit_message || `Approved & published to Master Library by ${user.name || 'Super Admin'}`,
         });
-        return sendSuccess(res, 'Policy approved & published successfully', approvedDoc);
     } else if (action === 'reject') {
         // If this is a revision of an already-live policy:
         // Do NOT unpublish the active policy! Keep it 'active' so all users continue to see it.
@@ -332,33 +371,65 @@ const reviewDocument = asyncHandler(async (req, res) => {
                 rejection_reason,
             });
         }
+        updatedDoc = await documentModel.findById(id);
     }
 
-    const updated = await documentModel.findById(id);
+    const updated = updatedDoc || (await documentModel.findById(id));
 
-    // Notify Author (or Revision Author)
-    if (document.pending_revision_by || document.requested_by || document.created_by) {
-        const targetUser = document.pending_revision_by || document.requested_by || document.created_by;
-        setImmediate(async () => {
-            try {
-                await sendNotificationToSingle({
-                    userId: targetUser,
-                    title: action === 'approve' ? '✅ Policy Approved & Published' : '❌ Policy Review Feedback',
-                    body: action === 'approve'
-                        ? `Your policy "${document.document_name}" has been approved and published to the Master Library.`
-                        : `Your policy "${document.document_name}" was reviewed: ${rejection_reason || 'Rework requested.'}`,
+    // ── Dispatch notifications ───────────────────────────────────────────────
+    setImmediate(async () => {
+        try {
+            const authorId = document.pending_revision_by || document.requested_by || document.created_by;
+
+            if (action === 'approve') {
+                // 1. Notify who created this policy or draft: "Your policy was approved"
+                if (authorId) {
+                    await sendNotificationToSingle({
+                        userId: authorId,
+                        title: 'Policy Approved & Published',
+                        body: `Your policy "${document.document_name}" has been approved and published to the Master Library.`,
+                        data: {
+                            type: 'policy_approved',
+                            document_id: id,
+                            clickAction: '/master-library',
+                        },
+                        clickAction: '/master-library',
+                    }).catch(err => console.error('[Document] Failed to notify author on approve:', err.message));
+                }
+
+                // 2. Broadcast to ALL active users: New policy or version is in live
+                const versionNum = updated?.current_version_number || updated?.version_number || '1.0';
+                await sendNotificationToAll({
+                    title: `New Policy Live: ${document.document_name}`,
+                    body: `Policy "${document.document_name}" (v${versionNum}) is now approved and live in the Master Library.`,
                     data: {
-                        type: action === 'approve' ? 'policy_approved' : 'policy_rejected',
+                        type: 'policy_live',
                         document_id: id,
-                        clickAction: '/change-management',
+                        clickAction: '/master-library',
                     },
-                    clickAction: '/change-management',
-                });
-            } catch (err) {
-                console.error('[Document] Failed to notify author:', err.message);
+                    clickAction: '/master-library',
+                }).catch(err => console.error('[Document] Failed to broadcast live policy notification:', err.message));
+
+            } else if (action === 'reject') {
+                // Notify who created this policy or draft: "Your policy was rejected"
+                if (authorId) {
+                    await sendNotificationToSingle({
+                        userId: authorId,
+                        title: 'Policy Review: Rejected',
+                        body: `Your policy "${document.document_name}" was rejected.${rejection_reason ? ' Reason: ' + rejection_reason : ''}`,
+                        data: {
+                            type: 'policy_rejected',
+                            document_id: id,
+                            clickAction: '/change-management',
+                        },
+                        clickAction: '/change-management',
+                    }).catch(err => console.error('[Document] Failed to notify author on reject:', err.message));
+                }
             }
-        });
-    }
+        } catch (notifErr) {
+            console.error('[Document] Review notification dispatch error:', notifErr.message);
+        }
+    });
 
     return sendSuccess(res, `Policy ${action === 'approve' ? 'approved & published' : 'rejected'} successfully`, updated);
 });
@@ -568,28 +639,41 @@ const submitRevisionForReview = asyncHandler(async (req, res) => {
         actor_id: userId,
     });
 
-    // Notify Super Admins
+    // Notify Approvers (Super Admins + users with approval permission in matrix) & Confirm to Submitter
     setImmediate(async () => {
         try {
-            const superAdmins = await rbacModel.getUsersWithPermission('documents', 'approval').catch(() => []);
-            const saRes = await pool.query("SELECT user_id AS id FROM public.user_roles WHERE role_id = 1");
-            const saIds = Array.from(new Set([...superAdmins, ...saRes.rows.map(r => r.id)])).filter(saId => saId !== userId);
+            const approvers = await rbacModel.getUsersWithPermission('documents', 'approval').catch(() => []);
+            const approverIds = approvers.filter(saId => saId !== userId);
 
-            if (saIds.length > 0) {
+            if (approverIds.length > 0) {
                 await sendNotificationToMany({
-                    userIds: saIds,
-                    title: '📋 Policy Revision Submitted for Review',
-                    body: `${user?.name || 'A user'} submitted revision v${document.pending_revision_version || ''} of "${document.document_name}" for review.`,
+                    userIds: approverIds,
+                    title: 'Policy Revision Submitted for Review',
+                    body: `${user?.name || 'A user'} submitted revision v${document.pending_revision_version || 'new'} of "${document.document_name}" for approval review.`,
                     data: {
                         type: 'policy_revision_submitted',
                         document_id: document.id,
-                        clickAction: `/documents/${document.id}`,
+                        clickAction: '/change-management',
                     },
-                    clickAction: `/documents/${document.id}`,
+                    clickAction: '/change-management',
+                });
+            }
+
+            if (userId) {
+                await sendNotificationToSingle({
+                    userId,
+                    title: 'Revision Submitted for Review',
+                    body: `Your revision v${document.pending_revision_version || 'new'} of "${document.document_name}" has been submitted for approval review.`,
+                    data: {
+                        type: 'policy_revision_submitted_confirm',
+                        document_id: document.id,
+                        clickAction: '/change-management',
+                    },
+                    clickAction: '/change-management',
                 });
             }
         } catch (e) {
-            console.error('Failed to dispatch Super Admin revision notification:', e);
+            console.error('Failed to dispatch revision notifications:', e);
         }
     });
 
@@ -741,8 +825,27 @@ const reviewPolicyRemoval = asyncHandler(async (req, res) => {
         actor_id: userId,
     });
 
-    if (action === 'approve') {
-        window?.dispatchEvent?.(new CustomEvent('liblist:refresh-nav'));
+    // Notify the user who requested removal
+    if (document.removal_requested_by) {
+        setImmediate(async () => {
+            try {
+                await sendNotificationToSingle({
+                    userId: document.removal_requested_by,
+                    title: action === 'approve' ? ' Policy Removal Approved' : ' Policy Removal Rejected',
+                    body: action === 'approve'
+                        ? `Your request to remove policy "${document.document_name}" has been approved. The policy is now suspended.`
+                        : `Your request to remove policy "${document.document_name}" was rejected. ${feedback ? 'Reason: ' + feedback : ''}`,
+                    data: {
+                        type: action === 'approve' ? 'policy_removal_approved' : 'policy_removal_rejected',
+                        document_id: id,
+                        clickAction: '/change-management',
+                    },
+                    clickAction: '/change-management',
+                });
+            } catch (err) {
+                console.error('[Document] Failed to notify removal requester:', err.message);
+            }
+        });
     }
 
     return sendSuccess(res,

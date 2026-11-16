@@ -1,5 +1,15 @@
 const taskModel = require('../models/task.model');
 const pool = require('../config/db');
+const { sendNotificationToSingle } = require('../services/notification.service');
+
+const formatRoleLabel = (role) => {
+    const r = (role || '').toLowerCase().trim();
+    if (r === 'approver' || r === 'approval') return 'Approver';
+    if (r === 'reviewer') return 'Reviewer';
+    if (r === 'for_info' || r === 'for info') return 'For Info';
+    if (r === 'collaborator') return 'Collaborator';
+    return role || 'Participant';
+};
 
 const taskController = {
     // ── GET ASSIGNABLE USERS ─────────────────────────────────────────────
@@ -106,6 +116,7 @@ const taskController = {
         try {
             const { title, description, category, due_date, library_id, section_id, assigned_to, assignees, participants } = req.body;
             const created_by = req.user?.id;
+            const creatorName = req.user?.name || req.user?.email || 'A user';
 
             const task = await taskModel.createTask({
                 title,
@@ -118,6 +129,65 @@ const taskController = {
                 assigned_to,
                 assignees,
                 participants
+            });
+
+            // Dispatch notifications according to their assigned task role
+            setImmediate(async () => {
+                try {
+                    const notifiedUserIds = new Set();
+
+                    // 1. Notify participants with specific assigned roles (e.g., Approver, Reviewer, For Info)
+                    if (Array.isArray(participants) && participants.length > 0) {
+                        for (const p of participants) {
+                            const pUid = p.user_id || p.userId || p.id;
+                            const pRole = p.role || 'participant';
+                            if (pUid && pUid !== created_by && !notifiedUserIds.has(pUid)) {
+                                notifiedUserIds.add(pUid);
+                                const roleText = formatRoleLabel(pRole);
+                                await sendNotificationToSingle({
+                                    userId: pUid,
+                                    title: `New Task: ${task.title}`,
+                                    body: `A new task was created: "${task.title}" (${task.task_seq || `#${task.id}`}). You are assigned as ${roleText}.`,
+                                    data: {
+                                        type: 'task_assigned',
+                                        task_id: task.id,
+                                        task_seq: task.task_seq,
+                                        role: pRole,
+                                        clickAction: '/taskworkspace',
+                                    },
+                                    clickAction: '/taskworkspace',
+                                }).catch(err => console.error(`Failed to notify participant ${pUid}:`, err.message));
+                            }
+                        }
+                    }
+
+                    // 2. Notify assignees (if not already notified as participant with a specific role)
+                    const assigneeList = Array.isArray(assignees) && assignees.length > 0
+                        ? assignees
+                        : (Array.isArray(assigned_to) ? assigned_to : (assigned_to ? [assigned_to] : []));
+
+                    for (const rawAssignee of assigneeList) {
+                        const aUid = typeof rawAssignee === 'object' ? (rawAssignee.user_id || rawAssignee.id) : rawAssignee;
+                        if (aUid && aUid !== created_by && !notifiedUserIds.has(aUid)) {
+                            notifiedUserIds.add(aUid);
+                            await sendNotificationToSingle({
+                                userId: aUid,
+                                title: `New Task Assigned: ${task.title}`,
+                                body: `A new task "${task.title}" (${task.task_seq || `#${task.id}`}) was created by ${creatorName} and assigned to you.`,
+                                data: {
+                                    type: 'task_assigned',
+                                    task_id: task.id,
+                                    task_seq: task.task_seq,
+                                    role: 'assignee',
+                                    clickAction: '/taskworkspace',
+                                },
+                                clickAction: '/taskworkspace',
+                            }).catch(err => console.error(`[Task] Failed to notify assignee ${aUid}:`, err.message));
+                        }
+                    }
+                } catch (notifErr) {
+                    console.error('[Task] Notification dispatch error:', notifErr.message);
+                }
             });
 
             return res.status(201).json({
@@ -192,6 +262,30 @@ const taskController = {
             const taskId = req.params.id;
             const { assigned_to, comment } = req.body;
             await taskModel.assignTask(taskId, assigned_to, req.user?.id, comment);
+
+            // Notify assigned user
+            if (assigned_to && assigned_to !== req.user?.id) {
+                setImmediate(async () => {
+                    try {
+                        const task = await taskModel.getTaskById(taskId).catch(() => null);
+                        const assignerName = req.user?.name || req.user?.email || 'A user';
+                        await sendNotificationToSingle({
+                            userId: assigned_to,
+                            title: `Task Assigned: ${task?.title || 'Task'}`,
+                            body: `Task "${task?.title || 'Task'}" (${task?.task_seq || `#${taskId}`}) was assigned to you by ${assignerName}.${comment ? ' Note: ' + comment : ''}`,
+                            data: {
+                                type: 'task_assigned',
+                                task_id: taskId,
+                                clickAction: '/taskworkspace',
+                            },
+                            clickAction: '/taskworkspace',
+                        });
+                    } catch (err) {
+                        console.error('[Task] Failed to notify assigned user:', err.message);
+                    }
+                });
+            }
+
             return res.status(200).json({ success: true, message: 'Task assignment updated' });
         } catch (err) {
             console.error('Error assigning task:', err);
@@ -325,6 +419,32 @@ const taskController = {
             const taskId = req.params.id;
             const { user_id, role } = req.body;
             const p = await taskModel.addParticipant(taskId, user_id, role);
+
+            // Notify added participant
+            if (user_id && user_id !== req.user?.id) {
+                setImmediate(async () => {
+                    try {
+                        const task = await taskModel.getTaskById(taskId).catch(() => null);
+                        const roleText = formatRoleLabel(role);
+                        const adderName = req.user?.name || req.user?.email || 'A user';
+                        await sendNotificationToSingle({
+                            userId: user_id,
+                            title: `Added to Task: ${task?.title || 'Task'}`,
+                            body: `You were added as ${roleText} on task "${task?.title || 'Task'}" (${task?.task_seq || `#${taskId}`}) by ${adderName}.`,
+                            data: {
+                                type: 'task_participant_added',
+                                task_id: taskId,
+                                role,
+                                clickAction: '/taskworkspace',
+                            },
+                            clickAction: '/taskworkspace',
+                        });
+                    } catch (err) {
+                        console.error('[Task] Failed to notify added participant:', err.message);
+                    }
+                });
+            }
+
             return res.status(201).json({ success: true, message: 'Participant added', data: p });
         } catch (err) {
             console.error('Error adding participant:', err);
