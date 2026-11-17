@@ -140,6 +140,7 @@ const taskModel = {
                    t.status,
                    t.due_date,
                    t.library_id,
+                   d_policy.document_name AS policy_title,
                    t.section_id,
                    t.created_by,
                    t.assigned_to,
@@ -195,6 +196,7 @@ const taskModel = {
                        WHERE part.task_id = t.id
                    ) as participants
             FROM tasks t
+            LEFT JOIN document_management.documents d_policy ON d_policy.id::text = t.library_id
             LEFT JOIN users u_creator ON t.created_by = u_creator.id
             LEFT JOIN users u_assigned ON t.assigned_to = u_assigned.id
             LEFT JOIN task_pins tp_curr ON t.id = tp_curr.task_id AND tp_curr.user_id = $${userId ? params.length + 3 : 0 || 1}
@@ -225,6 +227,7 @@ const taskModel = {
     async getTaskById(taskId, userId = null) {
         const query = `
             SELECT t.*,
+                   d_policy.document_name AS policy_title,
                    u_creator.name as creator_name,
                    u_creator.email as creator_email,
                    u_assigned.name as assigned_name,
@@ -275,6 +278,7 @@ const taskModel = {
                        WHERE part.task_id = t.id
                    ) as participants
             FROM tasks t
+            LEFT JOIN document_management.documents d_policy ON d_policy.id::text = t.library_id
             LEFT JOIN users u_creator ON t.created_by = u_creator.id
             LEFT JOIN users u_assigned ON t.assigned_to = u_assigned.id
             LEFT JOIN task_pins tp_curr ON t.id = tp_curr.task_id AND tp_curr.user_id = $2

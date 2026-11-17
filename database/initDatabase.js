@@ -117,6 +117,17 @@ const initializeDatabase = async () => {
             console.log('seed.sql applied.');
         }
 
+        const policyChatMigrationPath = path.join(__dirname, 'migrations', '006_policy_chat.sql');
+        if (fs.existsSync(policyChatMigrationPath)) {
+            await pool.query(fs.readFileSync(policyChatMigrationPath, 'utf8'));
+            console.log('Policy chat migration applied.');
+        }
+        const privateChatMigrationPath = path.join(__dirname, 'migrations', '007_private_chats.sql');
+        if (fs.existsSync(privateChatMigrationPath)) {
+            await pool.query(fs.readFileSync(privateChatMigrationPath, 'utf8'));
+            console.log('Private chat migration applied.');
+        }
+
         // ── 2. Seed Super Admin user ──────────────────────────────────────────
         await seedSuperAdmin();
 

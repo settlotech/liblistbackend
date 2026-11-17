@@ -1,2 +1,4 @@
 node_modules
 .env
+database/migrations/006_policy_chat.sql
+database/migrations/007_private_chats.sql

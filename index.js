@@ -60,6 +60,8 @@ const libraryRoutes = require('./routes/library.routes');
 const documentRoutes = require('./routes/document.routes');
 const templateRoutes = require('./routes/template.routes');
 const taskRoutes = require('./routes/task.routes');
+const policyChatRoutes = require('./routes/policyChat.routes');
+const privateChatRoutes = require('./routes/privateChat.routes');
 
 const API = process.env.API_VERSION || 'v1';
 
@@ -85,6 +87,8 @@ mountRoute('/signup', signupRoutes);
 mountRoute('/notifications', notificationRoutes);
 mountRoute('/dashboard', dashboardRoutes);
 mountRoute('/tasks', taskRoutes);
+mountRoute('/policies', policyChatRoutes);
+mountRoute('/chats', privateChatRoutes);
 // Document Management — single canonical prefix under /document-management/*
 mountRoute('/document-management/libraries', libraryRoutes);
 mountRoute('/document-management/documents', documentRoutes);
