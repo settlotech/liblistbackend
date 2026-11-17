@@ -6,15 +6,24 @@ const privateChatModel = {
         return result.rowCount > 0;
     },
 
-    async ensureAiChat(userId) {
-        const result = await pool.query(
-            `INSERT INTO private_chats (is_ai, owner_user_id)
-             VALUES (TRUE, $1)
-             ON CONFLICT (owner_user_id) WHERE is_ai = TRUE
-             DO UPDATE SET owner_user_id = EXCLUDED.owner_user_id
-             RETURNING id`,
-            [userId]
-        );
+    async ensureAiChat(userId, policyId = null) {
+        const result = policyId
+            ? await pool.query(
+                `INSERT INTO private_chats (is_ai, owner_user_id, policy_id)
+                 VALUES (TRUE, $1, $2)
+                 ON CONFLICT (owner_user_id, policy_id) WHERE is_ai = TRUE AND policy_id IS NOT NULL
+                 DO UPDATE SET owner_user_id = EXCLUDED.owner_user_id
+                 RETURNING id`,
+                [userId, policyId]
+            )
+            : await pool.query(
+                `INSERT INTO private_chats (is_ai, owner_user_id, policy_id)
+                 VALUES (TRUE, $1, NULL)
+                 ON CONFLICT (owner_user_id) WHERE is_ai = TRUE AND policy_id IS NULL
+                 DO UPDATE SET owner_user_id = EXCLUDED.owner_user_id
+                 RETURNING id`,
+                [userId]
+            );
         return result.rows[0].id;
     },
 
@@ -32,18 +41,22 @@ const privateChatModel = {
     },
 
     async getChats(userId) {
-        const aiChatId = await this.ensureAiChat(userId);
+        await this.ensureAiChat(userId);
         const [aiResult, directResult] = await Promise.all([
             pool.query(
-                `SELECT $1::bigint AS id, TRUE AS is_ai, NULL::uuid AS contact_id,
-                        'Shidney'::text AS contact_name, latest.content AS last_message,
+                `SELECT c.id, TRUE AS is_ai, c.policy_id, d.document_name AS policy_name,
+                        NULL::uuid AS contact_id, 'Shidney'::text AS contact_name,
+                        latest.content AS last_message,
                         latest.created_at AS last_message_at
-                 FROM (SELECT 1) seed
+                 FROM private_chats c
+                 LEFT JOIN document_management.documents d ON d.id = c.policy_id
                  LEFT JOIN LATERAL (
                     SELECT content, created_at FROM private_chat_messages
-                    WHERE chat_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1
-                 ) latest ON TRUE`,
-                [aiChatId]
+                    WHERE chat_id = c.id ORDER BY created_at DESC, id DESC LIMIT 1
+                 ) latest ON TRUE
+                 WHERE c.owner_user_id = $1 AND c.is_ai = TRUE
+                 ORDER BY COALESCE(latest.created_at, c.updated_at) DESC`,
+                [userId]
             ),
             pool.query(
                 `SELECT c.id, FALSE AS is_ai,

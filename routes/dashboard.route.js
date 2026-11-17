@@ -83,6 +83,16 @@ router.get('/overview', async (req, res, next) => {
                 LIMIT 5
             `).catch(() => ({ rows: [] }));
 
+            const policiesByDepartment = await pool.query(`
+                SELECT l.library_name AS department, COUNT(d.id)::int AS policy_count,
+                       COUNT(*) FILTER (WHERE d.status = 'active')::int AS active_count
+                FROM document_management.libraries l
+                LEFT JOIN document_management.documents d ON d.library_id = l.id AND d.deleted_at IS NULL
+                WHERE l.deleted_at IS NULL AND l.parent_library_id IS NULL
+                GROUP BY l.id, l.library_name
+                ORDER BY l.display_order, l.library_name
+            `).catch(() => ({ rows: [] }));
+
             stats = {
                 isSuperAdmin: true,
                 role: req.user?.role || 'Super Admin',
@@ -94,7 +104,8 @@ router.get('/overview', async (req, res, next) => {
                 ...templateCount.rows[0],
                 ...taskCounts.rows[0],
                 recentPolicies: recentPolicies.rows || [],
-                recentTasks: recentTasks.rows || []
+                recentTasks: recentTasks.rows || [],
+                policiesByDepartment: policiesByDepartment.rows || []
             };
         } else {
             // ── REGULAR USER / ROLE-BASED METRICS ──
@@ -123,7 +134,7 @@ router.get('/overview', async (req, res, next) => {
                 SELECT d.id, d.document_name, d.status, d.created_at, u.name as creator_name
                 FROM document_management.documents d
                 LEFT JOIN public.users u ON d.created_by = u.id
-                WHERE d.deleted_at IS NULL AND (d.created_by = $1 OR d.status = 'active')
+                WHERE d.deleted_at IS NULL AND (d.created_by = $1 OR d.requested_by = $1 OR d.pending_revision_by = $1)
                 ORDER BY d.created_at DESC
                 LIMIT 5
             `, [userId]).catch(() => ({ rows: [] }));
@@ -192,9 +203,10 @@ router.get('/activity-timeline', async (req, res, next) => {
                 created_at
             FROM document_management.document_activity_logs
             WHERE created_at >= NOW() - INTERVAL '1 day' * $1
+              AND actor_id = $2
             ORDER BY created_at DESC
             LIMIT 50
-        `, [days]).catch(() => ({ rows: [] }));
+        `, [Math.min(days, 7), req.user?.id]).catch(() => ({ rows: [] }));
 
         res.status(200).json({
             success: true,

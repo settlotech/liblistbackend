@@ -10,12 +10,12 @@
 --   2. Public schema  – core RBAC tables
 --   3. Task management tables (public schema)
 --   4. document_management schema – library / document / task tables
---   5. All historical migration changes (002 → 005 + template_approval) MERGED IN
+--   5. Current application tables, including policy chat and per-policy Shidney chats
 --   6. Reference / seed data  (roles, modules, operations, permissions)
 --   7. Super-admin user is seeded at runtime by:  node database/initDatabase.js
 --
 -- Usage:
---   psql -U <db_user> -d <db_name> -f 000_complete_schema.sql
+--   psql -U <db_user> -d <db_name> -f database/migrations/complete_schema.sql
 -- =============================================================================
 
 BEGIN;
@@ -720,6 +720,7 @@ CREATE TABLE IF NOT EXISTS public.private_chats (
     id BIGSERIAL PRIMARY KEY,
     is_ai BOOLEAN NOT NULL DEFAULT FALSE,
     owner_user_id UUID NULL REFERENCES public.users(id) ON DELETE CASCADE,
+    policy_id UUID NULL REFERENCES document_management.documents(id) ON DELETE CASCADE,
     user_low_id UUID NULL REFERENCES public.users(id) ON DELETE CASCADE,
     user_high_id UUID NULL REFERENCES public.users(id) ON DELETE CASCADE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -727,12 +728,27 @@ CREATE TABLE IF NOT EXISTS public.private_chats (
     CONSTRAINT chk_private_chat_participants CHECK (
         (is_ai = TRUE AND owner_user_id IS NOT NULL AND user_low_id IS NULL AND user_high_id IS NULL)
         OR
-        (is_ai = FALSE AND owner_user_id IS NULL AND user_low_id IS NOT NULL AND user_high_id IS NOT NULL AND user_low_id < user_high_id)
+        (is_ai = FALSE AND owner_user_id IS NULL AND policy_id IS NULL AND user_low_id IS NOT NULL AND user_high_id IS NOT NULL AND user_low_id < user_high_id)
     )
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS uq_private_chat_ai_owner
-    ON public.private_chats (owner_user_id) WHERE is_ai = TRUE;
+ALTER TABLE public.private_chats
+    ADD COLUMN IF NOT EXISTS policy_id UUID NULL
+    REFERENCES document_management.documents(id) ON DELETE CASCADE;
+ALTER TABLE public.private_chats
+    DROP CONSTRAINT IF EXISTS chk_private_chat_participants;
+ALTER TABLE public.private_chats
+    ADD CONSTRAINT chk_private_chat_participants CHECK (
+        (is_ai = TRUE AND owner_user_id IS NOT NULL AND user_low_id IS NULL AND user_high_id IS NULL)
+        OR
+        (is_ai = FALSE AND owner_user_id IS NULL AND policy_id IS NULL AND user_low_id IS NOT NULL AND user_high_id IS NOT NULL AND user_low_id < user_high_id)
+    );
+DROP INDEX IF EXISTS public.uq_private_chat_ai_owner;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_private_chat_ai_general_owner
+    ON public.private_chats (owner_user_id) WHERE is_ai = TRUE AND policy_id IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_private_chat_ai_policy_owner
+    ON public.private_chats (owner_user_id, policy_id) WHERE is_ai = TRUE AND policy_id IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_private_chat_direct_pair
     ON public.private_chats (user_low_id, user_high_id) WHERE is_ai = FALSE;
 
@@ -751,6 +767,3 @@ CREATE TABLE IF NOT EXISTS public.private_chat_messages (
 
 CREATE INDEX IF NOT EXISTS idx_private_chat_messages_chat_time
     ON public.private_chat_messages (chat_id, created_at, id);
--- Super-admin user is created at runtime by initDatabase.js which reads
---   SUPER_ADMIN_EMAIL / SUPER_ADMIN_PASSWORD / SUPER_ADMIN_NAME  from .env
--- =============================================================================

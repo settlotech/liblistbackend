@@ -107,11 +107,7 @@ const startServer = async () => {
         console.log('PostgreSQL connected successfully!');
         client.release();
 
-        if (process.env.RUN_DB_INIT_ON_STARTUP === 'true') {
-            await initializeDatabase();
-        } else {
-            console.log('Skipping database schema initialization; set RUN_DB_INIT_ON_STARTUP=true to run it explicitly.');
-        }
+        await initializeDatabase(); 
 
         app.listen(PORT, () => {
             console.log(`API running on http://localhost:${PORT}`);

@@ -75,58 +75,12 @@ const initializeDatabase = async () => {
     try {
         console.log('Initializing database...');
 
-        // ── Run the single complete schema (all tables + seed data) ────────
-        const completeSqlPath = path.join(__dirname, 'migrations', 'complete_schema.sql'); 
-        if (fs.existsSync(completeSqlPath)) { 
-            const sql = fs.readFileSync(completeSqlPath, 'utf8');
-            await pool.query(sql); 
-        } else { 
-            const schema = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
-            await pool.query(schema);
-            console.log('schema.sql applied.');
-
-            const liblistSchemaPath = path.join(__dirname, 'liblistSchema.sql');
-            if (fs.existsSync(liblistSchemaPath)) {
-                await pool.query(fs.readFileSync(liblistSchemaPath, 'utf8'));
-
-                // Safety: ensure extra columns that may be missing on old DBs
-                await pool.query(`
-                    ALTER TABLE document_management.documents ADD COLUMN IF NOT EXISTS live_version_id UUID NULL;
-                    ALTER TABLE document_management.documents ADD COLUMN IF NOT EXISTS pending_revision_id UUID NULL;
-                    ALTER TABLE document_management.documents ADD COLUMN IF NOT EXISTS has_pending_revision BOOLEAN NOT NULL DEFAULT FALSE;
-                    ALTER TABLE document_management.documents ADD COLUMN IF NOT EXISTS pending_revision_by UUID NULL;
-                    ALTER TABLE document_management.documents ADD COLUMN IF NOT EXISTS pending_revision_version VARCHAR(50) NULL;
-                    ALTER TABLE document_management.documents ADD COLUMN IF NOT EXISTS revision_status VARCHAR(50) DEFAULT NULL;
-                    ALTER TABLE document_management.documents ADD COLUMN IF NOT EXISTS requested_by UUID NULL;
-                    ALTER TABLE document_management.documents ADD COLUMN IF NOT EXISTS approved_by UUID NULL;
-                    ALTER TABLE document_management.documents ADD COLUMN IF NOT EXISTS approved_at TIMESTAMPTZ NULL;
-                    ALTER TABLE document_management.documents ADD COLUMN IF NOT EXISTS rejection_reason TEXT NULL;
-                    ALTER TABLE document_management.documents ADD COLUMN IF NOT EXISTS pending_removal BOOLEAN NOT NULL DEFAULT FALSE;
-                    ALTER TABLE document_management.documents ADD COLUMN IF NOT EXISTS removal_requested_by UUID NULL;
-                    ALTER TABLE document_management.documents ADD COLUMN IF NOT EXISTS removal_reason TEXT;
-                    ALTER TABLE document_management.documents ADD COLUMN IF NOT EXISTS removal_requested_at TIMESTAMPTZ;
-                    ALTER TABLE document_management.documents ADD COLUMN IF NOT EXISTS removal_reviewed_by UUID NULL;
-                    ALTER TABLE document_management.documents ADD COLUMN IF NOT EXISTS removal_reviewed_at TIMESTAMPTZ;
-                    ALTER TABLE document_management.documents ADD COLUMN IF NOT EXISTS removal_review_feedback TEXT;
-                `);
-                console.log('liblistSchema.sql applied.');
-            }
-
-            const seed = fs.readFileSync(path.join(__dirname, 'seed.sql'), 'utf8');
-            await pool.query(seed);
-            console.log('seed.sql applied.');
+        const completeSqlPath = path.join(__dirname, 'migrations', 'complete_schema.sql');
+        if (!fs.existsSync(completeSqlPath)) {
+            throw new Error(`Canonical database setup file not found: ${completeSqlPath}`);
         }
-
-        const policyChatMigrationPath = path.join(__dirname, 'migrations', '006_policy_chat.sql');
-        if (fs.existsSync(policyChatMigrationPath)) {
-            await pool.query(fs.readFileSync(policyChatMigrationPath, 'utf8'));
-            console.log('Policy chat migration applied.');
-        }
-        const privateChatMigrationPath = path.join(__dirname, 'migrations', '007_private_chats.sql');
-        if (fs.existsSync(privateChatMigrationPath)) {
-            await pool.query(fs.readFileSync(privateChatMigrationPath, 'utf8'));
-            console.log('Private chat migration applied.');
-        }
+        await pool.query(fs.readFileSync(completeSqlPath, 'utf8'));
+        console.log('complete_schema.sql applied.');
 
         // ── 2. Seed Super Admin user ──────────────────────────────────────────
         await seedSuperAdmin();
