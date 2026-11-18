@@ -179,6 +179,7 @@ CREATE TABLE IF NOT EXISTS public.tasks (
     description TEXT,
     category    VARCHAR(50)  DEFAULT 'general',
     status      VARCHAR(50)  DEFAULT 'responded',
+    due_date    TIMESTAMPTZ  NULL,
     library_id  VARCHAR(100),
     section_id  VARCHAR(100),
     created_by  UUID         REFERENCES public.users(id) ON DELETE SET NULL,
@@ -186,6 +187,9 @@ CREATE TABLE IF NOT EXISTS public.tasks (
     created_at  TIMESTAMPTZ  DEFAULT NOW(),
     updated_at  TIMESTAMPTZ  DEFAULT NOW()
 );
+
+ALTER TABLE public.tasks
+    ADD COLUMN IF NOT EXISTS due_date TIMESTAMPTZ NULL;
 
 CREATE TABLE IF NOT EXISTS public.task_participants (
     id         SERIAL      PRIMARY KEY,
@@ -354,6 +358,7 @@ CREATE TABLE IF NOT EXISTS document_management.document_sections (
     section_number    VARCHAR(100),
     section_order     INTEGER      NOT NULL DEFAULT 0,
     content           JSONB        NOT NULL DEFAULT '{"type":"doc","content":[]}'::jsonb,
+    draft_content     JSONB        NULL,
     page_start        INTEGER      NULL,
     page_end          INTEGER      NULL,
     is_active         BOOLEAN      NOT NULL DEFAULT TRUE,
@@ -372,6 +377,9 @@ CREATE TABLE IF NOT EXISTS document_management.document_sections (
     ),
     CONSTRAINT chk_section_content_object  CHECK (jsonb_typeof(content) = 'object')
 );
+
+ALTER TABLE document_management.document_sections
+    ADD COLUMN IF NOT EXISTS draft_content JSONB NULL;
 
 CREATE INDEX IF NOT EXISTS idx_sections_document_parent_order ON document_management.document_sections (document_id, parent_section_id, section_order) WHERE deleted_at IS NULL AND is_active = TRUE;
 CREATE INDEX IF NOT EXISTS idx_sections_parent                ON document_management.document_sections (parent_section_id);
@@ -404,7 +412,7 @@ CREATE TABLE IF NOT EXISTS document_management.document_versions (
     id                UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     document_id       UUID        NOT NULL REFERENCES document_management.documents(id)         ON DELETE CASCADE,
     parent_version_id UUID        NULL     REFERENCES document_management.document_versions(id) ON DELETE RESTRICT,
-    version_number    INTEGER     NOT NULL DEFAULT 1,
+    version_number    VARCHAR(50) NOT NULL DEFAULT '1.0',
     version_tag       VARCHAR(50) NULL,
     commit_hash       VARCHAR(64) NOT NULL,
     commit_message    TEXT        NOT NULL,
@@ -413,9 +421,24 @@ CREATE TABLE IF NOT EXISTS document_management.document_versions (
     created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT uq_document_version_number UNIQUE (document_id, version_number),
     CONSTRAINT uq_document_commit_hash    UNIQUE (document_id, commit_hash),
-    CONSTRAINT chk_version_number         CHECK (version_number >= 1),
     CONSTRAINT chk_commit_hash            CHECK (commit_hash ~ '^[0-9a-f]{64}$')
 );
+
+DO $$
+BEGIN
+    ALTER TABLE document_management.document_versions DROP CONSTRAINT IF EXISTS chk_version_number;
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'document_management'
+          AND table_name   = 'document_versions'
+          AND column_name  = 'version_number'
+          AND data_type   <> 'character varying'
+    ) THEN
+        ALTER TABLE document_management.document_versions
+            ALTER COLUMN version_number TYPE VARCHAR(50) USING version_number::text,
+            ALTER COLUMN version_number SET DEFAULT '1.0';
+    END IF;
+END $$;
 
 CREATE INDEX IF NOT EXISTS idx_document_versions_doc_num ON document_management.document_versions (document_id, version_number DESC);
 CREATE INDEX IF NOT EXISTS idx_document_versions_hash    ON document_management.document_versions (commit_hash);
@@ -497,10 +520,13 @@ CREATE TABLE IF NOT EXISTS document_management.document_annotations (
     document_id     UUID         NOT NULL REFERENCES document_management.documents(id)         ON DELETE CASCADE,
     section_id      UUID         NULL     REFERENCES document_management.document_sections(id) ON DELETE CASCADE,
     asset_id        UUID         NULL     REFERENCES document_management.document_assets(id)   ON DELETE SET NULL,
+    version_id      UUID         NULL     REFERENCES document_management.document_versions(id) ON DELETE SET NULL,
     annotation_type VARCHAR(20)  NOT NULL,
     category        VARCHAR(20)  NOT NULL DEFAULT 'NOTES',
     anchor_data     JSONB        NOT NULL DEFAULT '{}'::jsonb,
     annotation_text TEXT         NOT NULL,
+    label           VARCHAR(100) NULL,
+    color           VARCHAR(30)  DEFAULT '#0057B8',
     reference_code  VARCHAR(100) NULL,
     status          VARCHAR(20)  NOT NULL DEFAULT 'open',
     created_by      UUID         NULL,
@@ -509,10 +535,20 @@ CREATE TABLE IF NOT EXISTS document_management.document_annotations (
     updated_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
     deleted_at      TIMESTAMPTZ  NULL,
     CONSTRAINT chk_annotation_type          CHECK (annotation_type IN ('TEXT', 'IMAGE')),
-    CONSTRAINT chk_annotation_category      CHECK (category IN ('NOTES', 'ACTION', 'CDE', 'REGULATORY', 'REVISION')),
+    CONSTRAINT chk_annotation_category      CHECK (category IN ('NOTES', 'ACTION', 'CDE', 'REGULATORY', 'REVISION', 'COMPLIANCE', 'RISK', 'AUDIT', 'GENERAL', 'EXCEPTION')),
     CONSTRAINT chk_annotation_status        CHECK (status  IN ('open', 'resolved', 'archived')),
     CONSTRAINT chk_annotation_anchor_object CHECK (jsonb_typeof(anchor_data) = 'object')
 );
+
+ALTER TABLE document_management.document_annotations
+    ADD COLUMN IF NOT EXISTS version_id UUID NULL REFERENCES document_management.document_versions(id) ON DELETE SET NULL,
+    ADD COLUMN IF NOT EXISTS label      VARCHAR(100) NULL,
+    ADD COLUMN IF NOT EXISTS color      VARCHAR(30) DEFAULT '#0057B8';
+ALTER TABLE document_management.document_annotations DROP CONSTRAINT IF EXISTS chk_annotation_category;
+ALTER TABLE document_management.document_annotations
+    ADD CONSTRAINT chk_annotation_category CHECK (
+        category IN ('NOTES', 'ACTION', 'CDE', 'REGULATORY', 'REVISION', 'COMPLIANCE', 'RISK', 'AUDIT', 'GENERAL', 'EXCEPTION')
+    );
 
 CREATE INDEX IF NOT EXISTS idx_annotations_doc_sec        ON document_management.document_annotations (document_id, section_id) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_annotations_asset          ON document_management.document_annotations (asset_id)                WHERE deleted_at IS NULL;
@@ -670,25 +706,28 @@ CROSS  JOIN public.operations o
 WHERE  r.role_name = 'Super Admin'
 ON CONFLICT (role_id, module_id, operation_id) DO NOTHING;
 
--- ── Admin -> users / roles / permissions (full CRUD) ─────────────────────────
+-- ── Admin -> operational & management permissions ───────────────────────────
 INSERT INTO public.role_permissions (role_id, module_id, operation_id)
 SELECT r.id, m.id, o.id
 FROM   public.roles r
 CROSS  JOIN public.modules m
 CROSS  JOIN public.operations o
 WHERE  r.role_name  = 'Admin'
-  AND  m.module_name IN ('users', 'roles', 'permissions')
+  AND  m.module_name IN ('users', 'roles', 'permissions', 'userrole', 'usersrequest', 'policy_access', 'templates', 'libraries', 'documents')
 ON CONFLICT (role_id, module_id, operation_id) DO NOTHING;
 
--- ── Admin -> read-only on policy_access (migration 003) ──────────────────────
+-- ── User -> standard workspace permissions (read libraries/policies/templates, draft/submit) ──
 INSERT INTO public.role_permissions (role_id, module_id, operation_id)
 SELECT r.id, m.id, o.id
 FROM   public.roles r
 CROSS  JOIN public.modules m
 CROSS  JOIN public.operations o
-WHERE  r.role_name      = 'Admin'
-  AND  m.module_name    = 'policy_access'
-  AND  o.operation_name = 'read'
+WHERE  r.role_name = 'User'
+  AND (
+      (m.module_name = 'libraries' AND o.operation_name = 'read')
+      OR (m.module_name = 'templates' AND o.operation_name IN ('read', 'create'))
+      OR (m.module_name = 'documents' AND o.operation_name IN ('read', 'create', 'update', 'export'))
+  )
 ON CONFLICT (role_id, module_id, operation_id) DO NOTHING;
 
 COMMIT;

@@ -108,7 +108,10 @@ const findAll = async ({ category, status, search, limit = 50, offset = 0 } = {}
         LEFT JOIN users requester ON requester.id = t.requested_by
         LEFT JOIN users approver ON approver.id = t.approved_by
         ${whereClause}
-        ORDER BY t.created_at DESC
+        ORDER BY
+            CASE WHEN t.template_id IS NOT NULL THEN 0 ELSE 1 END,
+            t.template_id ASC NULLS LAST,
+            t.created_at DESC
         LIMIT $${values.length + 1} OFFSET $${values.length + 2};
     `;
     const dataRes = await query(dataQuery, [...values, limit, offset]);
