@@ -209,12 +209,13 @@ const findAll = async ({
       v.version_number AS current_version_number,
       v.commit_hash AS current_commit_hash,
       pv.version_number AS pending_version_number,
+      pv.commit_message AS pending_revision_commit_message,
       pv.parent_version_id AS pending_revision_parent_version_id,
       lv.version_number AS live_version_number,
       lv.commit_message AS live_version_commit_message,
-      COALESCE(parent_v.version_number, lv.version_number) AS parent_version_number,
-      COALESCE(parent_v.commit_message, lv.commit_message) AS parent_commit_message,
-      COALESCE(pv.parent_version_id, v.parent_version_id, d.live_version_id) AS parent_version_id,
+      COALESCE(base_v.version_number, parent_v.version_number, lv.version_number) AS parent_version_number,
+      COALESCE(base_v.commit_message, parent_v.commit_message, lv.commit_message) AS parent_commit_message,
+      COALESCE(base_v.id, pv.parent_version_id, v.parent_version_id, d.live_version_id) AS parent_version_id,
       (SELECT COUNT(*)::int FROM document_management.document_sections s WHERE s.document_id = d.id AND s.deleted_at IS NULL) AS section_count,
       (SELECT COUNT(*)::int FROM document_management.document_versions ver WHERE ver.document_id = d.id) AS version_count
     FROM document_management.documents d
@@ -224,6 +225,7 @@ const findAll = async ({
     LEFT JOIN document_management.document_versions v ON COALESCE(d.live_version_id, d.current_version_id) = v.id
     LEFT JOIN document_management.document_versions pv ON d.pending_revision_id = pv.id
     LEFT JOIN document_management.document_versions lv ON d.live_version_id = lv.id
+    LEFT JOIN document_management.document_versions base_v ON base_v.document_id = d.id AND base_v.version_number = '1.0'
     LEFT JOIN document_management.document_versions parent_v ON COALESCE(pv.parent_version_id, v.parent_version_id, d.live_version_id) = parent_v.id
     ${whereClause}
     ORDER BY d.updated_at DESC
@@ -691,10 +693,11 @@ const updateSections = async (documentId, sections, updatedBy, isDraftOnly = fal
 const getVersionSections = async (versionId) => {
     const res = await query(
         `SELECT dsv.id, dsv.section_id, dsv.section_title, dsv.content, dsv.created_at,
-                dvs.document_version_id
+                dvs.document_version_id, dvs.section_order
          FROM document_management.document_version_sections dvs
          JOIN document_management.document_section_versions dsv ON dvs.section_version_id = dsv.id
-         WHERE dvs.document_version_id = $1`,
+         WHERE dvs.document_version_id = $1
+         ORDER BY dvs.section_order ASC, dsv.section_title ASC`,
         [versionId]
     );
     return res.rows;
@@ -724,6 +727,7 @@ const rejectPendingRevision = async (documentId, rejectionReason = null) => {
         `UPDATE document_management.documents
          SET has_pending_revision = false,
              revision_status = 'rejected',
+             pending_document_name = NULL,
              pending_revision_by = NULL,
              pending_revision_version = NULL,
              pending_revision_id = NULL,
@@ -835,6 +839,8 @@ const approveRevision = async (documentId, approvedByUserId, { commit_message } 
         `UPDATE document_management.documents
          SET current_version_id = $1,
              live_version_id = $1,
+             document_name = COALESCE(pending_document_name, document_name),
+             pending_document_name = NULL,
              has_pending_revision = false,
              revision_status = NULL,
              pending_revision_by = NULL,
@@ -894,6 +900,7 @@ const discardPendingRevision = async (documentId) => {
         `UPDATE document_management.documents
          SET has_pending_revision = false,
              revision_status = NULL,
+             pending_document_name = NULL,
              pending_revision_by = NULL,
              pending_revision_version = NULL,
              pending_revision_id = NULL,

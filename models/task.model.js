@@ -289,38 +289,80 @@ const taskModel = {
     },
 
     // ── UPDATE TASK ──────────────────────────────────────────────────────
-    async updateTask(taskId, { title, description, category, due_date }) {
-        const updates = [];
-        const params = [taskId];
+    async updateTask(taskId, { title, description, category, due_date, assigned_to, assignees, participants }) {
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+            const existing = await client.query('SELECT id FROM tasks WHERE id = $1 FOR UPDATE', [taskId]);
+            if (existing.rowCount === 0) {
+                await client.query('ROLLBACK');
+                return null;
+            }
 
-        if (title !== undefined) {
-            params.push(title);
-            updates.push(`title = $${params.length}`);
-        }
-        if (description !== undefined) {
-            params.push(description);
-            updates.push(`description = $${params.length}`);
-        }
-        if (category !== undefined) {
-            params.push(category);
-            updates.push(`category = $${params.length}`);
-        }
-        if (due_date !== undefined) {
-            params.push(due_date || null);
-            updates.push(`due_date = $${params.length}`);
-        }
+            const updates = [];
+            const params = [taskId];
+            if (title !== undefined) {
+                params.push(title);
+                updates.push(`title = $${params.length}`);
+            }
+            if (description !== undefined) {
+                params.push(description);
+                updates.push(`description = $${params.length}`);
+            }
+            if (category !== undefined) {
+                params.push(category);
+                updates.push(`category = $${params.length}`);
+            }
+            if (due_date !== undefined) {
+                params.push(due_date || null);
+                updates.push(`due_date = $${params.length}`);
+            }
 
-        if (updates.length === 0) return null;
-        updates.push('updated_at = NOW()');
+            const assignmentWasProvided = assignees !== undefined || assigned_to !== undefined;
+            let assigneeIds = [];
+            if (assignmentWasProvided) {
+                assigneeIds = Array.isArray(assignees)
+                    ? assignees
+                    : (Array.isArray(assigned_to) ? assigned_to : (assigned_to ? [assigned_to] : []));
+                assigneeIds = [...new Set(assigneeIds)];
+                params.push(assigneeIds[0] || null);
+                updates.push(`assigned_to = $${params.length}`);
+            }
 
-        const query = `
-            UPDATE tasks
-            SET ${updates.join(', ')}
-            WHERE id = $1
-            RETURNING *
-        `;
-        const res = await pool.query(query, params);
-        return res.rows[0];
+            if (updates.length > 0) {
+                updates.push('updated_at = NOW()');
+                await client.query(`UPDATE tasks SET ${updates.join(', ')} WHERE id = $1`, params);
+            }
+
+            if (assignmentWasProvided) {
+                await client.query('DELETE FROM task_assignees WHERE task_id = $1', [taskId]);
+                for (const userId of assigneeIds) {
+                    await client.query(
+                        'INSERT INTO task_assignees (task_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
+                        [taskId, userId]
+                    );
+                }
+            }
+
+            if (participants !== undefined) {
+                await client.query('DELETE FROM task_participants WHERE task_id = $1', [taskId]);
+                for (const participant of participants) {
+                    await client.query(
+                        'INSERT INTO task_participants (task_id, user_id, role) VALUES ($1, $2, $3)',
+                        [taskId, participant.user_id, participant.role]
+                    );
+                }
+            }
+
+            const updated = await client.query('SELECT * FROM tasks WHERE id = $1', [taskId]);
+            await client.query('COMMIT');
+            return updated.rows[0] || null;
+        } catch (err) {
+            await client.query('ROLLBACK');
+            throw err;
+        } finally {
+            client.release();
+        }
     },
 
     // ── DELETE TASK ──────────────────────────────────────────────────────

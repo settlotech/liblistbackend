@@ -205,6 +205,18 @@ const taskController = {
     async updateTask(req, res) {
         try {
             const taskId = req.params.id;
+            const task = await taskModel.getTaskById(taskId);
+            if (!task) return res.status(404).json({ success: false, message: 'Task not found' });
+            const isAuthor = task.created_by && String(task.created_by) === String(req.user?.id);
+            const isSuperAdmin = req.user?.isSuperAdmin === true ||
+                ['super admin', 'super_admin'].includes((req.user?.role || '').toLowerCase()) ||
+                (Array.isArray(req.user?.roles) && req.user.roles.some(r => {
+                    const roleName = (typeof r === 'string' ? r : r.role_name || '').toLowerCase();
+                    return roleName === 'super admin' || roleName === 'super_admin';
+                }));
+            if (!isAuthor && !isSuperAdmin) {
+                return res.status(403).json({ success: false, message: 'Only the task author or a Super Admin can edit this task.' });
+            }
             const updated = await taskModel.updateTask(taskId, req.body);
             if (!updated) {
                 return res.status(404).json({ success: false, message: 'Task not found' });

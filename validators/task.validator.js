@@ -29,7 +29,15 @@ const updateTaskSchema = z.object({
     title: z.string().trim().min(1).max(255).optional(),
     description: z.string().trim().max(5000).optional().nullable(),
     category: z.enum(['common', 'general']).optional(),
-    due_date: z.string().optional().nullable()
+    due_date: z.string().optional().nullable(),
+    assigned_to: z.union([uuidSchema, z.array(uuidSchema)]).optional().nullable(),
+    assignees: z.array(uuidSchema).optional(),
+    participants: z.array(
+        z.object({
+            user_id: uuidSchema,
+            role: z.enum(['approver', 'reviewer', 'for_info'])
+        })
+    ).max(50).optional()
 }).strict();
 
 const assignTaskSchema = z.object({

@@ -387,7 +387,7 @@ const reviewDocument = asyncHandler(async (req, res) => {
                     await sendNotificationToSingle({
                         userId: authorId,
                         title: 'Policy Approved & Published',
-                        body: `Your policy "${document.document_name}" has been approved and published to the Master Library.`,
+                        body: `Your policy "${updated?.document_name || document.document_name}" has been approved and published to the Master Library.`,
                         data: {
                             type: 'policy_approved',
                             document_id: id,
@@ -537,7 +537,7 @@ const saveSectionEdits = asyncHandler(async (req, res) => {
     const { id } = req.params;
     const user = req.user;
     const userId = user?.id;
-    const { sections, isDraftOnly = true } = req.body;
+    const { sections, isDraftOnly = true, document_name } = req.body;
 
     if (!Array.isArray(sections) || sections.length === 0) {
         throw new AppError('sections must be a non-empty array', 400);
@@ -563,8 +563,23 @@ const saveSectionEdits = asyncHandler(async (req, res) => {
         }
     }
 
+    const pendingName = typeof document_name === 'string' ? document_name.trim() : '';
+    if (document_name !== undefined) {
+        if (!pendingName || pendingName.length > 500) {
+            throw new AppError('Policy title must contain 1 to 500 characters.', 400);
+        }
+    }
+
     // Save strictly to draft_content so live users continue seeing current published version
     const updated = await documentModel.updateSections(id, sections, userId, isDraftOnly);
+    if (document_name !== undefined) {
+        await pool.query(
+            `UPDATE document_management.documents
+             SET pending_document_name = $1, updated_at = NOW()
+             WHERE id = $2 AND has_pending_revision = TRUE`,
+            [pendingName, id]
+        );
+    }
     return sendSuccess(res, `${updated.length} section(s) saved successfully`, updated);
 });
 
@@ -608,7 +623,11 @@ const submitRevisionForReview = asyncHandler(async (req, res) => {
         }
     }
 
-    const { commit_message } = req.body || {};
+    const { commit_message, document_name } = req.body || {};
+    const pendingDocumentName = typeof document_name === 'string' ? document_name.trim() : '';
+    if (document_name !== undefined && (!pendingDocumentName || pendingDocumentName.length > 500)) {
+        throw new AppError('Policy title must contain 1 to 500 characters.', 400);
+    }
 
     // Update the pending revision version's commit message if provided
     if (commit_message && document.pending_revision_id) {
@@ -624,9 +643,10 @@ const submitRevisionForReview = asyncHandler(async (req, res) => {
     await pool.query(
         `UPDATE document_management.documents
          SET revision_status = 'pending_review',
+             pending_document_name = COALESCE($2, pending_document_name),
              updated_at = NOW()
          WHERE id = $1`,
-        [id]
+        [id, pendingDocumentName || null]
     );
 
     await activityModel.logActivity({
@@ -649,7 +669,7 @@ const submitRevisionForReview = asyncHandler(async (req, res) => {
                 await sendNotificationToMany({
                     userIds: approverIds,
                     title: 'Policy Revision Submitted for Review',
-                    body: `${user?.name || 'A user'} submitted revision v${document.pending_revision_version || 'new'} of "${document.document_name}" for approval review.`,
+                    body: `${user?.name || 'A user'} submitted revision v${document.pending_revision_version || 'new'} of "${pendingDocumentName || document.pending_document_name || document.document_name}" for approval review.`,
                     data: {
                         type: 'policy_revision_submitted',
                         document_id: document.id,
@@ -663,7 +683,7 @@ const submitRevisionForReview = asyncHandler(async (req, res) => {
                 await sendNotificationToSingle({
                     userId,
                     title: 'Revision Submitted for Review',
-                    body: `Your revision v${document.pending_revision_version || 'new'} of "${document.document_name}" has been submitted for approval review.`,
+                    body: `Your revision v${document.pending_revision_version || 'new'} of "${pendingDocumentName || document.pending_document_name || document.document_name}" has been submitted for approval review.`,
                     data: {
                         type: 'policy_revision_submitted_confirm',
                         document_id: document.id,

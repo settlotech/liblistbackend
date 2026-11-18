@@ -56,6 +56,7 @@ CREATE TABLE IF NOT EXISTS document_management.documents (
     current_version_id  UUID NULL,
     live_version_id     UUID NULL,
     pending_revision_id UUID NULL,
+    pending_document_name VARCHAR(500) NULL,
     has_pending_revision BOOLEAN NOT NULL DEFAULT FALSE,
     source_type         VARCHAR(20) NOT NULL DEFAULT 'manual',
     original_file_name  VARCHAR(500),
@@ -75,6 +76,9 @@ CREATE TABLE IF NOT EXISTS document_management.documents (
     CONSTRAINT chk_document_source_type CHECK (source_type IN ('manual', 'upload', 'template')),
     CONSTRAINT chk_document_file_size CHECK (original_file_size IS NULL OR original_file_size >= 0)
 );
+
+ALTER TABLE document_management.documents
+    ADD COLUMN IF NOT EXISTS pending_document_name VARCHAR(500);
 
 CREATE TABLE IF NOT EXISTS document_management.policy_user_access (
     id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -284,8 +288,12 @@ CREATE INDEX IF NOT EXISTS idx_version_changes_section
     ON document_management.document_version_changes(section_id);
 
 
+CREATE SEQUENCE IF NOT EXISTS document_management.note_custom_id_seq;
+CREATE SEQUENCE IF NOT EXISTS document_management.annotation_custom_id_seq;
+
 CREATE TABLE IF NOT EXISTS document_management.document_annotations (
     id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    custom_id           VARCHAR(20) NOT NULL,
     document_id         UUID NOT NULL REFERENCES document_management.documents(id) ON DELETE CASCADE,
     section_id          UUID NULL REFERENCES document_management.document_sections(id) ON DELETE CASCADE,
     asset_id            UUID NULL REFERENCES document_management.document_assets(id) ON DELETE SET NULL,
@@ -305,6 +313,40 @@ CREATE TABLE IF NOT EXISTS document_management.document_annotations (
     CONSTRAINT chk_annotation_status CHECK (status IN ('open', 'resolved', 'archived')),
     CONSTRAINT chk_annotation_anchor_object CHECK (jsonb_typeof(anchor_data) = 'object')
 );
+
+ALTER TABLE document_management.document_annotations
+    ADD COLUMN IF NOT EXISTS custom_id VARCHAR(20);
+
+WITH numbered_notes AS (
+    SELECT id, row_number() OVER (ORDER BY created_at, id) AS seq
+    FROM document_management.document_annotations
+    WHERE custom_id IS NULL AND annotation_type = 'TEXT'
+)
+UPDATE document_management.document_annotations a
+SET custom_id = 'NOT' || lpad(numbered_notes.seq::text, GREATEST(4, length(numbered_notes.seq::text)), '0')
+FROM numbered_notes
+WHERE a.id = numbered_notes.id;
+
+WITH numbered_annotations AS (
+    SELECT id, row_number() OVER (ORDER BY created_at, id) AS seq
+    FROM document_management.document_annotations
+    WHERE custom_id IS NULL AND annotation_type <> 'TEXT'
+)
+UPDATE document_management.document_annotations a
+SET custom_id = 'ANN' || lpad(numbered_annotations.seq::text, GREATEST(5, length(numbered_annotations.seq::text)), '0')
+FROM numbered_annotations
+WHERE a.id = numbered_annotations.id;
+
+SELECT setval('document_management.note_custom_id_seq', GREATEST(1, count(*)::bigint), count(*) > 0)
+FROM document_management.document_annotations WHERE annotation_type = 'TEXT';
+SELECT setval('document_management.annotation_custom_id_seq', GREATEST(1, count(*)::bigint), count(*) > 0)
+FROM document_management.document_annotations WHERE annotation_type <> 'TEXT';
+
+ALTER TABLE document_management.document_annotations
+    ALTER COLUMN custom_id SET NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_document_annotations_custom_id
+    ON document_management.document_annotations(custom_id);
 
 CREATE INDEX IF NOT EXISTS idx_annotations_doc_sec
     ON document_management.document_annotations(document_id, section_id)

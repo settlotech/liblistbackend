@@ -19,13 +19,21 @@ const create = async ({
     status = 'open',
     created_by = null,
 }) => {
+    const isNote = annotation_type === 'TEXT';
+    const customIdPrefix = isNote ? 'NOT' : 'ANN';
+    const customIdSequence = isNote
+        ? 'document_management.note_custom_id_seq'
+        : 'document_management.annotation_custom_id_seq';
     const text = `
         INSERT INTO document_management.document_annotations (
-            document_id, section_id, asset_id, version_id,
+            custom_id, document_id, section_id, asset_id, version_id,
             annotation_type, category, anchor_data, annotation_text,
             label, color, reference_code, status, created_by, updated_by, created_at, updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $13, NOW(), NOW())
+        VALUES (
+            $14 || lpad(nextval($15::regclass)::text, CASE WHEN $14 = 'NOT' THEN 4 ELSE 5 END, '0'),
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $13, NOW(), NOW()
+        )
         RETURNING *;
     `;
     const res = await query(text, [
@@ -42,6 +50,8 @@ const create = async ({
         reference_code,
         status,
         created_by,
+        customIdPrefix,
+        customIdSequence,
     ]);
     return res.rows[0];
 };
