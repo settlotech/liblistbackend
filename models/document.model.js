@@ -1013,7 +1013,7 @@ const getPinnedPolicies = async (userId) => {
             d.status,
             d.updated_at,
             l.library_name,
-            COALESCE(v.version_number, '1.0') AS current_version_number,
+            COALESCE(v.version_number::text, '1.0') AS current_version_number,
             upp.created_at AS pinned_at
         FROM document_management.user_pinned_policies upp
         JOIN document_management.documents d ON upp.document_id = d.id

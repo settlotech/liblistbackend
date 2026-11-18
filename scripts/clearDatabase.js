@@ -14,7 +14,7 @@
 'use strict';
 
 const pool    = require('../config/db');
-const bcrypt  = require('bcrypt');
+const bcrypt  = require('bcryptjs');
 require('dotenv').config();
 
 // ─── 1. Truncate all tables (order respects FK deps) ──────────────────────────

@@ -1,5 +1,5 @@
 const pool = require('../config/db');
-const bcrypt = require('bcrypt');
+const bcrypt = require('bcryptjs');
 const BCRYPT_ROUNDS = Number(process.env.BCRYPT_ROUNDS || 12);
 const OTP_EXPIRY_MINUTES = 10;
 

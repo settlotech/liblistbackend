@@ -1,16 +1,42 @@
 const { Pool } = require('pg');
 require('dotenv').config();
 
-const pool = new Pool({
-    host: process.env.DB_HOST,
-    port: process.env.DB_PORT,
-    database: process.env.DB_NAME,
-    user: process.env.DB_USER,
-    password: process.env.DB_PASSWORD,
-    max: 20,
-    idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 5000,
-});
+const connectionString = process.env.DATABASE_URL;
+const isVercel = Boolean(process.env.VERCEL);
+
+let poolConfig;
+if (connectionString) {
+    const isLocalConn =
+        connectionString.includes('localhost') ||
+        connectionString.includes('127.0.0.1');
+    poolConfig = {
+        connectionString,
+        ssl: isLocalConn && process.env.DB_SSL !== 'true'
+            ? false
+            : { rejectUnauthorized: false },
+        max: isVercel ? 5 : 20,
+        idleTimeoutMillis: 30000,
+        connectionTimeoutMillis: 10000,
+    };
+} else {
+    const host = process.env.DB_HOST || '127.0.0.1';
+    const isLocalHost = host === 'localhost' || host === '127.0.0.1';
+    poolConfig = {
+        host,
+        port: Number(process.env.DB_PORT || 5432),
+        database: process.env.DB_NAME || 'liblist_draft1',
+        user: process.env.DB_USER || 'postgres',
+        password: process.env.DB_PASSWORD || 'postgres',
+        ssl: !isLocalHost || process.env.DB_SSL === 'true'
+            ? { rejectUnauthorized: false }
+            : false,
+        max: isVercel ? 5 : 20,
+        idleTimeoutMillis: 30000,
+        connectionTimeoutMillis: 10000,
+    };
+}
+
+const pool = new Pool(poolConfig);
 
 pool.on('error', (error) => {
     console.error('Unexpected PostgreSQL pool error:', error);

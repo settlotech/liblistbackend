@@ -22,7 +22,7 @@ const createDocumentSchema = z.object({
     description: z.string().trim().max(4000).optional().nullable(),
     document_type: z.string().trim().max(100).optional().nullable(),
     source_type: z
-        .enum(['manual', 'template', 'import_pdf', 'import_docx'])
+        .enum(['manual', 'template', 'upload', 'import_pdf', 'import_docx'])
         .default('manual'),
 });
 
@@ -35,7 +35,7 @@ const updateDocumentSchema = z.object({
         .optional(),
     description: z.string().trim().max(4000).optional().nullable(),
     document_type: z.string().trim().max(100).optional().nullable(),
-    status: z.enum(['draft', 'in_review', 'approved', 'archived']).optional(),
+    status: z.enum(['active', 'draft', 'in_review', 'approved', 'archived']).optional(),
 });
 
 const moveDocumentSchema = z.object({
@@ -47,7 +47,7 @@ const moveDocumentSchema = z.object({
 const documentQuerySchema = z.object({
     library_id: z.string().regex(UUID_REGEX).optional(),
     status: z
-        .enum(['draft', 'in_review', 'approved', 'archived', 'all'])
+        .enum(['active', 'draft', 'in_review', 'approved', 'archived', 'all'])
         .optional()
         .default('all'),
     document_type: z.string().trim().optional(),

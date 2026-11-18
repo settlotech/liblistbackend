@@ -951,26 +951,44 @@ const extractAndFormatPolicyWithAI = asyncHandler(async (req, res) => {
     const useTemplate = req.body.useTemplate !== 'false' && req.body.useTemplate !== false;
     const { templateId } = req.body;
     let targetTemplate = null;
-    if (useTemplate && templateId) {
-        targetTemplate = await templateModel.findById(templateId);
+    if (useTemplate) {
+        if (templateId) {
+            targetTemplate = await templateModel.findById(templateId).catch(() => null);
+        }
+        if (!targetTemplate) {
+            const { templates } = await templateModel.findAll({ status: 'approved', limit: 1 });
+            targetTemplate = templates?.[0] || null;
+        }
     }
 
-    // 1. Extract raw text and images from file
+    // 1. Extract raw text, tables, and images sequentially from file
     const rawResult = await aiExtractionService.extractRawTextFromFile(fileBuffer, mimeType, fileName);
 
     if (!rawResult.text || !rawResult.text.trim()) {
         throw new AppError('Could not extract any readable text from the uploaded document.', 400);
     }
 
-    // 2. Transform text using Groq Cloud AI with extracted images
-    const aiResult = await aiExtractionService.transformTextWithTemplate(rawResult.text, targetTemplate, useTemplate, rawResult.images || []);
+    // 2. Transform text using Groq Cloud AI with extracted tables & images
+    const aiResult = await aiExtractionService.transformTextWithTemplate(
+        rawResult.text,
+        targetTemplate,
+        useTemplate,
+        rawResult.images || [],
+        rawResult.tables || []
+    );
 
     return sendSuccess(res, 'Policy extracted and formatted successfully', {
         source_file_name: fileName,
         source_type: rawResult.source_type,
+        applied_template: targetTemplate ? {
+            id: targetTemplate.id,
+            template_id: targetTemplate.template_id,
+            template_name: targetTemplate.template_name,
+        } : null,
         raw_text: rawResult.text,
         raw_html: rawResult.html,
         images: rawResult.images || [],
+        tables: rawResult.tables || [],
         extracted: aiResult,
     });
 });

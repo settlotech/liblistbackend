@@ -1,6 +1,6 @@
 const pool = require('../config/db');
 const rbacModel = require('./rbac.model');
-const bcrypt = require('bcrypt');
+const bcrypt = require('bcryptjs');
 
 const BCRYPT_ROUNDS = Number(process.env.BCRYPT_ROUNDS || 12);
 
