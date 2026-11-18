@@ -22,6 +22,7 @@ const create = async ({
     INSERT INTO document_management.documents (
       library_id,
       document_name,
+      root_document_name,
       description,
       document_type,
       status,
@@ -36,7 +37,7 @@ const create = async ({
       approved_by,
       approved_at
     )
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+    VALUES ($1, $2, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
     RETURNING *;
   `;
     const values = [
@@ -96,6 +97,7 @@ const findById = async (id) => {
     const text = `
     SELECT 
       d.*,
+      COALESCE(d.root_document_name, d.document_name) AS root_policy_name,
       l.library_name,
       u_req.name AS requested_by_name,
       u_req.email AS requested_by_email,
@@ -202,6 +204,7 @@ const findAll = async ({
     const dataText = `
     SELECT 
       d.*,
+      COALESCE(d.root_document_name, d.document_name) AS root_policy_name,
       l.library_name,
       u_req.name AS requested_by_name,
       u_req.email AS requested_by_email,
@@ -213,9 +216,9 @@ const findAll = async ({
       pv.parent_version_id AS pending_revision_parent_version_id,
       lv.version_number AS live_version_number,
       lv.commit_message AS live_version_commit_message,
-      COALESCE(base_v.version_number, parent_v.version_number, lv.version_number) AS parent_version_number,
-      COALESCE(base_v.commit_message, parent_v.commit_message, lv.commit_message) AS parent_commit_message,
-      COALESCE(base_v.id, pv.parent_version_id, v.parent_version_id, d.live_version_id) AS parent_version_id,
+      root_v.version_number AS parent_version_number,
+      parent_v.commit_message AS parent_commit_message,
+      root_v.id AS parent_version_id,
       (SELECT COUNT(*)::int FROM document_management.document_sections s WHERE s.document_id = d.id AND s.deleted_at IS NULL) AS section_count,
       (SELECT COUNT(*)::int FROM document_management.document_versions ver WHERE ver.document_id = d.id) AS version_count
     FROM document_management.documents d
@@ -225,8 +228,8 @@ const findAll = async ({
     LEFT JOIN document_management.document_versions v ON COALESCE(d.live_version_id, d.current_version_id) = v.id
     LEFT JOIN document_management.document_versions pv ON d.pending_revision_id = pv.id
     LEFT JOIN document_management.document_versions lv ON d.live_version_id = lv.id
-    LEFT JOIN document_management.document_versions base_v ON base_v.document_id = d.id AND base_v.version_number = '1.0'
-    LEFT JOIN document_management.document_versions parent_v ON COALESCE(pv.parent_version_id, v.parent_version_id, d.live_version_id) = parent_v.id
+    LEFT JOIN document_management.document_versions root_v ON root_v.document_id = d.id AND root_v.version_number = '1.0'
+    LEFT JOIN document_management.document_versions parent_v ON root_v.id = parent_v.id
     ${whereClause}
     ORDER BY d.updated_at DESC
     LIMIT ${limitParam} OFFSET ${offsetParam};
@@ -493,6 +496,14 @@ const createVersionSnapshot = async (documentId, userId, { commit_message = 'Pol
     );
     const doc = docRes.rows[0];
     if (!doc) throw new Error('Document not found');
+
+    // Capture the original policy title before any approved revision can rename it.
+    await query(
+        `UPDATE document_management.documents
+         SET root_document_name = COALESCE(root_document_name, document_name)
+         WHERE id = $1`,
+        [documentId]
+    );
 
     // Fetch all live sections
     const sectionsRes = await query(
@@ -783,15 +794,15 @@ const approveRevision = async (documentId, approvedByUserId, { commit_message } 
         targetVersionId = vRes.rows[0].id;
     } else {
         // CASE B: Existing revision draft being approved
-        // Update version tag to 'active' and update commit_message
-        const commitMsg = commit_message || `Approved & published by Super Admin`;
+        // Preserve the revision's commit message. The approval message is only a
+        // fallback for older revisions that were created without one.
         await query(
             `UPDATE document_management.document_versions
              SET version_tag = 'active',
-                 commit_message = COALESCE($1, commit_message),
+                 commit_message = COALESCE(commit_message, $1),
                  committed_at = NOW()
              WHERE id = $2`,
-            [commitMsg, targetVersionId]
+            [commit_message || `Approved & published by Super Admin`, targetVersionId]
         );
     }
 
@@ -839,6 +850,7 @@ const approveRevision = async (documentId, approvedByUserId, { commit_message } 
         `UPDATE document_management.documents
          SET current_version_id = $1,
              live_version_id = $1,
+             root_document_name = COALESCE(root_document_name, document_name),
              document_name = COALESCE(pending_document_name, document_name),
              pending_document_name = NULL,
              has_pending_revision = false,

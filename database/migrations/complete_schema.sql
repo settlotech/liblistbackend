@@ -283,6 +283,7 @@ CREATE TABLE IF NOT EXISTS document_management.documents (
     id                       UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
     library_id               UUID         NOT NULL REFERENCES document_management.libraries(id) ON DELETE RESTRICT,
     document_name            VARCHAR(500) NOT NULL,
+    root_document_name       VARCHAR(500),
     description              TEXT,
     document_type            VARCHAR(100),
     -- Full status set (migrations 002 + 004 merged)
@@ -328,6 +329,8 @@ CREATE TABLE IF NOT EXISTS document_management.documents (
 -- Upgrade existing installations as well as creating fresh schemas.
 ALTER TABLE document_management.documents
     ADD COLUMN IF NOT EXISTS pending_document_name VARCHAR(500);
+ALTER TABLE document_management.documents
+    ADD COLUMN IF NOT EXISTS root_document_name VARCHAR(500);
 
 CREATE INDEX IF NOT EXISTS idx_documents_library_created ON document_management.documents (library_id, created_at DESC) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_documents_status          ON document_management.documents (status)                       WHERE deleted_at IS NULL;

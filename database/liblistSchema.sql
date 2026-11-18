@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS document_management.documents (
     id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     library_id          UUID NOT NULL REFERENCES document_management.libraries(id) ON DELETE RESTRICT,
     document_name       VARCHAR(500) NOT NULL,
+    root_document_name  VARCHAR(500) NULL,
     description         TEXT,
     document_type       VARCHAR(100),
     status              VARCHAR(20) NOT NULL DEFAULT 'draft',
@@ -79,6 +80,8 @@ CREATE TABLE IF NOT EXISTS document_management.documents (
 
 ALTER TABLE document_management.documents
     ADD COLUMN IF NOT EXISTS pending_document_name VARCHAR(500);
+ALTER TABLE document_management.documents
+    ADD COLUMN IF NOT EXISTS root_document_name VARCHAR(500);
 
 CREATE TABLE IF NOT EXISTS document_management.policy_user_access (
     id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
