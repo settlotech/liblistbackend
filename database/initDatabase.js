@@ -1,14 +1,14 @@
 const fs   = require('fs');
 const path = require('path');
 const pool = require('../config/db');
-const bcrypt = require('bcrypt');
+const bcrypt = require('bcryptjs');
 require('dotenv').config();
 
  
 const seedSuperAdmin = async () => {
-    const email         = process.env.SUPER_ADMIN_EMAIL;
-    const plainPassword = process.env.SUPER_ADMIN_PASSWORD;
-    const name          = process.env.SUPER_ADMIN_NAME;
+    const email         = process.env.SUPER_ADMIN_EMAIL || 'settlo@gmail.com';
+    const plainPassword = process.env.SUPER_ADMIN_PASSWORD || '123456';
+    const name          = process.env.SUPER_ADMIN_NAME || 'Super Admin';
     const rounds        = Number(process.env.BCRYPT_ROUNDS) || 10;
     const client        = await pool.connect();
 
@@ -75,6 +75,22 @@ const initializeDatabase = async () => {
     try {
         console.log('Initializing database...');
 
+        // In serverless/Vercel, skip heavy DDL on warm or already-seeded DB unless forced
+        if (process.env.VERCEL && process.env.RUN_DB_INIT_ON_STARTUP !== 'true') {
+            try {
+                const checkRes = await pool.query(
+                    `SELECT to_regclass('public.users') IS NOT NULL AS users_ready,
+                            to_regclass('document_management.documents') IS NOT NULL AS dms_ready`
+                );
+                if (checkRes.rows[0]?.users_ready && checkRes.rows[0]?.dms_ready) {
+                    console.log('Database schema already initialized.');
+                    return;
+                }
+            } catch (_) {
+                // Proceed to schema apply if inspection failed
+            }
+        }
+
         const completeSqlPath = path.join(__dirname, 'migrations', 'complete_schema.sql');
         if (!fs.existsSync(completeSqlPath)) {
             throw new Error(`Canonical database setup file not found: ${completeSqlPath}`);
@@ -88,7 +104,9 @@ const initializeDatabase = async () => {
         console.log('Database initialisation complete.');
     } catch (error) {
         console.error('Database initialisation failed:', error.message);
-        process.exitCode = 1;
+        if (!process.env.VERCEL) {
+            process.exitCode = 1;
+        }
         throw error;
     }
 };

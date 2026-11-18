@@ -1,6 +1,5 @@
 const https = require('https');
 const zlib = require('zlib');
-const { PDFParse } = require('pdf-parse');
 const mammoth = require('mammoth');
 require('dotenv').config();
 
@@ -420,6 +419,7 @@ const extractRawTextFromFile = async (buffer, mimeType, originalName = '') => {
 
     if (mimeType === 'application/pdf' || lowerName.endsWith('.pdf')) {
         try {
+            const { PDFParse } = require('pdf-parse');
             const parser = new PDFParse({ data: buffer });
             await parser.load();
             const [textResult, tableResult, imgResult] = await Promise.all([

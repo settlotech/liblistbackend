@@ -26,10 +26,18 @@ const allowedOrigins = (process.env.CORS_ORIGINS || [
 app.use(cors({
     origin(origin, callback) {
         if (!origin) return callback(null, true);
-        return callback(null, allowedOrigins.includes(origin));
+        if (
+            allowedOrigins.includes(origin) ||
+            origin.endsWith('.vercel.app') ||
+            origin.startsWith('http://localhost:') ||
+            origin.startsWith('http://127.0.0.1:')
+        ) {
+            return callback(null, true);
+        }
+        return callback(null, false);
     },
     credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE']
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']
 }));
 
 // Body Parsers
@@ -73,6 +81,25 @@ app.get('/', (req, res) => {
     });
 });
 
+let dbInitPromise = null;
+const ensureDatabaseReady = () => {
+    if (!dbInitPromise) {
+        dbInitPromise = initializeDatabase().catch((err) => {
+            console.error('Lazy DB initialization warning:', err.message);
+            dbInitPromise = null;
+        });
+    }
+    return dbInitPromise;
+};
+
+// Ensure DB schema exists on first API call in serverless cold starts without blocking root healthcheck
+app.use(`/api`, async (req, res, next) => {
+    if (process.env.VERCEL) {
+        await ensureDatabaseReady();
+    }
+    next();
+});
+
 // Mount Routes with /api/v1 and /api for full compatibility
 const mountRoute = (path, router) => {
     app.use(`/api/${API}${path}`, router);
@@ -107,7 +134,7 @@ const startServer = async () => {
         console.log('PostgreSQL connected successfully!');
         client.release();
 
-        await initializeDatabase(); 
+        await initializeDatabase();
 
         app.listen(PORT, () => {
             console.log(`API running on http://localhost:${PORT}`);
@@ -119,4 +146,9 @@ const startServer = async () => {
     }
 };
 
-startServer();
+// Export Express app for Vercel Serverless Function deployment
+module.exports = app;
+
+if (!process.env.VERCEL && require.main === module) {
+    startServer();
+}
