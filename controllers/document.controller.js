@@ -537,7 +537,7 @@ const saveSectionEdits = asyncHandler(async (req, res) => {
     const { id } = req.params;
     const user = req.user;
     const userId = user?.id;
-    const { sections, isDraftOnly = true, document_name } = req.body;
+    const { sections, isDraftOnly = true, document_name, replaceAll = false } = req.body;
 
     if (!Array.isArray(sections) || sections.length === 0) {
         throw new AppError('sections must be a non-empty array', 400);
@@ -571,7 +571,7 @@ const saveSectionEdits = asyncHandler(async (req, res) => {
     }
 
     // Save strictly to draft_content so live users continue seeing current published version
-    const updated = await documentModel.updateSections(id, sections, userId, isDraftOnly);
+    const updated = await documentModel.updateSections(id, sections, userId, isDraftOnly, { replaceAll });
     if (document_name !== undefined) {
         await pool.query(
             `UPDATE document_management.documents

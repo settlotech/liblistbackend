@@ -582,10 +582,10 @@ const createVersionSnapshot = async (documentId, userId, { commit_message = 'Pol
         if (secVerId) {
             await query(
                 `INSERT INTO document_management.document_version_sections
-                    (document_version_id, section_id, section_version_id)
-                 VALUES ($1, $2, $3)
+                    (document_version_id, section_id, section_version_id, section_order)
+                 VALUES ($1, $2, $3, $4)
                  ON CONFLICT DO NOTHING`,
-                [newVersion.id, sec.id, secVerId]
+                [newVersion.id, sec.id, secVerId, sec.section_order ?? 0]
             );
         }
     }
@@ -656,47 +656,120 @@ const getVersionHistory = async (documentId) => {
     return res.rows;
 };
 
-// Update sections directly (draft editing)
-const updateSections = async (documentId, sections, updatedBy, isDraftOnly = false) => {
-    const results = [];
-    for (const sec of sections) {
-        const { sectionId, content, section_title } = sec;
-        const contentStr = typeof content === 'object'
-            ? JSON.stringify(content)
-            : (content || '{"type":"doc","content":[]}');
-        
-        let queryText;
-        let queryParams;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-        if (isDraftOnly) {
-            // Write only to draft_content so live content is completely unaffected for all users!
-            queryText = `
-                UPDATE document_management.document_sections
-                SET draft_content = $1::jsonb,
-                    updated_at = NOW(),
-                    updated_by = $2
-                WHERE id = $3 AND document_id = $4 AND deleted_at IS NULL
-                RETURNING id, section_title
-            `;
-            queryParams = [contentStr, updatedBy, sectionId, documentId];
-        } else {
-            // Permanent live overwrite (e.g. after approval)
-            queryText = `
-                UPDATE document_management.document_sections
-                SET content = $1::jsonb,
-                    draft_content = NULL,
-                    section_title = COALESCE($2, section_title),
-                    updated_at = NOW(),
-                    updated_by = $3
-                WHERE id = $4 AND document_id = $5 AND deleted_at IS NULL
-                RETURNING id, section_title
-            `;
-            queryParams = [contentStr, section_title || null, updatedBy, sectionId, documentId];
+const toValidTipTapJsonStr = (content) => {
+    if (content && typeof content === 'object') {
+        return JSON.stringify(content);
+    }
+    if (typeof content === 'string' && content.trim()) {
+        try {
+            const parsed = JSON.parse(content);
+            if (parsed && typeof parsed === 'object') return JSON.stringify(parsed);
+        } catch (_) {
+            // Fall through to wrap plain/HTML text safely into a TipTap paragraph
+        }
+        const plain = content.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+        return JSON.stringify({
+            type: 'doc',
+            content: [{ type: 'paragraph', content: plain ? [{ type: 'text', text: plain }] : [] }],
+        });
+    }
+    return '{"type":"doc","content":[]}';
+};
+
+// Update sections directly (draft editing, ordering, additions, and deletions)
+const updateSections = async (documentId, sections, updatedBy, isDraftOnly = false, options = {}) => {
+    const { replaceAll = false } = options || {};
+    const docStatusRes = await query(
+        `SELECT status FROM document_management.documents WHERE id = $1 AND deleted_at IS NULL`,
+        [documentId]
+    );
+    const docStatus = docStatusRes.rows[0]?.status || 'draft';
+    const results = [];
+    const keptSectionIds = [];
+
+    for (let idx = 0; idx < sections.length; idx++) {
+        const sec = sections[idx] || {};
+        const rawId = sec.sectionId || sec.id || null;
+        const isExistingUuid = typeof rawId === 'string' && UUID_PATTERN.test(rawId);
+        const title = String(sec.section_title || sec.title || `Section ${idx + 1}`).trim() || `Section ${idx + 1}`;
+        const orderVal = Number.isFinite(Number(sec.section_order ?? sec.order))
+            ? Number(sec.section_order ?? sec.order)
+            : idx;
+        const contentStr = toValidTipTapJsonStr(sec.content);
+
+        if (isExistingUuid) {
+            let queryText;
+            let queryParams;
+
+            if (isDraftOnly) {
+                queryText = `
+                    UPDATE document_management.document_sections
+                    SET draft_content = $1::jsonb,
+                        section_title = COALESCE($2, section_title),
+                        section_order = $3,
+                        updated_at = NOW(),
+                        updated_by = $4
+                    WHERE id = $5 AND document_id = $6 AND deleted_at IS NULL
+                    RETURNING id, section_title, section_order
+                `;
+                queryParams = [contentStr, title, orderVal, updatedBy, rawId, documentId];
+            } else {
+                queryText = `
+                    UPDATE document_management.document_sections
+                    SET content = $1::jsonb,
+                        draft_content = NULL,
+                        section_title = COALESCE($2, section_title),
+                        section_order = $3,
+                        updated_at = NOW(),
+                        updated_by = $4
+                    WHERE id = $5 AND document_id = $6 AND deleted_at IS NULL
+                    RETURNING id, section_title, section_order
+                `;
+                queryParams = [contentStr, title, orderVal, updatedBy, rawId, documentId];
+            }
+
+            const res = await query(queryText, queryParams);
+            if (res.rows[0]) {
+                results.push(res.rows[0]);
+                keptSectionIds.push(res.rows[0].id);
+                continue;
+            }
         }
 
-        const res = await query(queryText, queryParams);
-        if (res.rows[0]) results.push(res.rows[0]);
+        // Insert newly added section from section-wise editor (+ Add Section / + Add Paragraph)
+        const emptyLive = '{"type":"doc","content":[]}';
+        const isLiveRevisionDraft = isDraftOnly && docStatus !== 'draft';
+        const insertRes = await query(
+            `INSERT INTO document_management.document_sections
+                (document_id, section_title, section_order, content, draft_content, created_by, updated_by)
+             VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6, $6)
+             RETURNING id, section_title, section_order`,
+            [
+                documentId,
+                title,
+                orderVal,
+                isLiveRevisionDraft ? emptyLive : contentStr,
+                isDraftOnly ? contentStr : null,
+                updatedBy,
+            ]
+        );
+        if (insertRes.rows[0]) {
+            results.push(insertRes.rows[0]);
+            keptSectionIds.push(insertRes.rows[0].id);
+        }
     }
+
+    if (replaceAll && keptSectionIds.length > 0) {
+        await query(
+            `UPDATE document_management.document_sections
+             SET deleted_at = NOW(), updated_by = $2, updated_at = NOW()
+             WHERE document_id = $1 AND deleted_at IS NULL AND id <> ALL($3::uuid[])`,
+            [documentId, updatedBy, keptSectionIds]
+        );
+    }
+
     return results;
 };
 

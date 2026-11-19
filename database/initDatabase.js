@@ -75,8 +75,11 @@ const initializeDatabase = async () => {
     try {
         console.log('Initializing database...');
 
-        // In serverless/Vercel, skip heavy DDL on warm or already-seeded DB unless forced
-        if (process.env.VERCEL && process.env.RUN_DB_INIT_ON_STARTUP !== 'true') {
+        // Skip heavy DDL when schema already exists (on Vercel or when RUN_DB_INIT_ON_STARTUP=false)
+        const skipHeavyInit =
+            process.env.RUN_DB_INIT_ON_STARTUP === 'false' ||
+            (process.env.VERCEL && process.env.RUN_DB_INIT_ON_STARTUP !== 'true');
+        if (skipHeavyInit) {
             try {
                 const checkRes = await pool.query(
                     `SELECT to_regclass('public.users') IS NOT NULL AS users_ready,
