@@ -39,14 +39,16 @@ const { sendOtpEmail } = require('../services/emailService');
 const REFRESH_DAYS       = Number(process.env.REFRESH_TOKEN_DAYS) || 7;
 const SHORT_SESSION_DAYS = Number(process.env.SHORT_SESSION_DAYS) || 1;
 
+const isCrossSiteProd = Boolean(process.env.VERCEL) || process.env.NODE_ENV === 'production';
+
 /**
  * Set the refresh-token as an HttpOnly cookie.
  */
 const setRefreshCookie = (res, token, days) => {
     res.cookie('refreshToken', token, {
         httpOnly: true,
-        secure:   process.env.NODE_ENV === 'production',
-        sameSite: 'lax',
+        secure:   isCrossSiteProd,
+        sameSite: isCrossSiteProd ? 'none' : 'lax',
         maxAge:   days * 24 * 60 * 60 * 1000,
         path:     '/',
     });
@@ -56,7 +58,12 @@ const setRefreshCookie = (res, token, days) => {
  * Clear the refresh-token cookie.
  */
 const clearRefreshCookie = (res) => {
-    res.clearCookie('refreshToken', { path: '/' });
+    res.clearCookie('refreshToken', {
+        httpOnly: true,
+        secure:   isCrossSiteProd,
+        sameSite: isCrossSiteProd ? 'none' : 'lax',
+        path:     '/',
+    });
 };
 
 // ─── POST /api/auth/register ─────────────────────────────────────────────────
