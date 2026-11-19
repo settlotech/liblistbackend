@@ -114,7 +114,13 @@ router.get('/overview', async (req, res, next) => {
                     COUNT(CASE WHEN created_by = $1 THEN 1 END)::int AS my_policies,
                     COUNT(CASE WHEN created_by = $1 AND status = 'active' THEN 1 END)::int AS my_active_policies,
                     COUNT(CASE WHEN created_by = $1 AND status = 'draft' THEN 1 END)::int AS my_draft_policies,
-                    COUNT(CASE WHEN status = 'active' THEN 1 END)::int AS total_active_policies,
+                    COUNT(CASE WHEN status = 'active' AND NOT EXISTS (
+                        SELECT 1
+                        FROM document_management.policy_user_access pua
+                        WHERE pua.document_id = documents.id
+                          AND pua.user_id = $1
+                          AND pua.can_view = FALSE
+                    ) THEN 1 END)::int AS total_active_policies,
                     COUNT(CASE WHEN status = 'draft' AND requested_by = $1 THEN 1 END)::int AS my_pending_approvals
                 FROM document_management.documents
                 WHERE deleted_at IS NULL
