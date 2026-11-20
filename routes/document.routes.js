@@ -14,6 +14,8 @@ const {
     updatePolicyAccess,
     getUserPolicyAccessList,
     bulkUpdateUserPolicyAccess,
+    getDepartmentAccess,
+    saveDepartmentAccess,
     createRevision,
     submitRevisionForReview,
     discardRevision,
@@ -65,6 +67,8 @@ router.get('/library/:libraryId', authenticate, validate(libraryIdParamSchema, '
 // User-Centric Policy Access Controls — MUST be before /:id to avoid "user-access" being treated as an id
 router.get('/user-access/:userId', authenticate, checkPermission('policy_access', 'read'), getUserPolicyAccessList);
 router.put('/user-access/:userId', authenticate, checkPermission('policy_access', 'update'), bulkUpdateUserPolicyAccess);
+router.get('/department-access/:userId', authenticate, checkPermission('policy_access', 'read'), getDepartmentAccess);
+router.put('/department-access/:userId', authenticate, checkPermission('policy_access', 'update'), saveDepartmentAccess);
 
 // Policy Removal Workflow — before /:id to avoid route conflicts
 router.get('/pending-removals', authenticate, getPendingPolicyRemovals);

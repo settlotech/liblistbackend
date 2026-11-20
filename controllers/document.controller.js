@@ -9,6 +9,35 @@ const rbacModel = require('../models/rbac.model');
 const templateModel = require('../models/template.model');
 const aiExtractionService = require('../services/aiExtraction.service');
 const pool = require('../config/db');
+const hasDepartmentPermission = async (userId, libraryId, permission) => {
+    const result = await pool.query(`WITH RECURSIVE ancestors AS (
+        SELECT id, parent_library_id, 0 AS depth FROM document_management.libraries WHERE id=$2
+        UNION ALL SELECT p.id, p.parent_library_id, a.depth+1 FROM document_management.libraries p
+        JOIN ancestors a ON p.id=a.parent_library_id
+    ) SELECT dua.${permission} AS allowed FROM ancestors a
+        JOIN document_management.department_user_access dua ON dua.library_id=a.id
+        WHERE dua.user_id=$1 ORDER BY a.depth LIMIT 1`, [userId, libraryId]);
+    return result.rows[0]?.allowed === true;
+};
+
+const getDepartmentAdminIdsForLibrary = async (libraryId) => {
+    const result = await pool.query(`WITH RECURSIVE ancestors AS (
+        SELECT id, parent_library_id, 0 AS depth FROM document_management.libraries WHERE id=$1
+        UNION ALL SELECT p.id, p.parent_library_id, a.depth+1 FROM document_management.libraries p
+        JOIN ancestors a ON p.id=a.parent_library_id
+    ), effective_access AS (
+        SELECT DISTINCT ON (dua.user_id) dua.user_id, dua.can_edit
+        FROM ancestors a JOIN document_management.department_user_access dua ON dua.library_id=a.id
+        ORDER BY dua.user_id, a.depth
+    )
+    SELECT DISTINCT u.id
+    FROM effective_access ea
+    JOIN public.user_roles ur ON ur.user_id=ea.user_id
+    JOIN public.roles r ON r.id=ur.role_id AND r.is_active=TRUE AND LOWER(r.role_name)='department admin'
+    JOIN public.users u ON u.id=ea.user_id AND u.is_active=TRUE
+    WHERE ea.can_edit=TRUE`, [libraryId]);
+    return result.rows.map(row => row.id);
+};
 
 const createDocument = asyncHandler(async (req, res) => {
     const user = req.user;
@@ -27,6 +56,9 @@ const createDocument = asyncHandler(async (req, res) => {
     if (!library) {
         throw new AppError('Specified library does not exist.', 404);
     }
+    if (isDepartmentAdmin(user) && !await hasDepartmentPermission(userId, library_id, 'can_edit')) {
+        throw new AppError('You need edit access to this department to create a policy there.', 403);
+    }
 
     const document = await documentModel.create({
         library_id,
@@ -41,6 +73,19 @@ const createDocument = asyncHandler(async (req, res) => {
         requested_by: userId,
     });
 
+    await pool.query(`UPDATE document_management.documents d SET department_approval_status='pending'
+        WHERE d.id=$1 AND EXISTS (
+            WITH RECURSIVE ancestors AS (
+                SELECT id, parent_library_id FROM document_management.libraries WHERE id=d.library_id
+                UNION ALL SELECT p.id, p.parent_library_id FROM document_management.libraries p JOIN ancestors a ON p.id=a.parent_library_id
+            )
+            SELECT 1 FROM document_management.department_user_access dua
+            JOIN public.user_roles ur ON ur.user_id=dua.user_id
+            JOIN public.roles r ON r.id=ur.role_id AND r.is_active=TRUE
+            JOIN ancestors a ON a.id=dua.library_id
+            WHERE dua.can_edit=TRUE AND LOWER(r.role_name)='department admin'
+        )`, [document.id]);
+
     await activityModel.logActivity({
         document_id: document.id,
         library_id: document.library_id,
@@ -51,24 +96,31 @@ const createDocument = asyncHandler(async (req, res) => {
         actor_id: userId,
     });
 
-    // Notify Approvers (Super Admins + Users with approval in Permission Matrix) & Confirm to Author
+    // Route the first review to the assigned Department admins; notify final approvers only when no Department admin is assigned.
     setImmediate(async () => {
         try {
-            const approvers = await rbacModel.getUsersWithPermission('documents', 'approval').catch(() => []);
-            const approverIds = approvers.filter(id => id !== userId);
-
-            if (approverIds.length > 0) {
-                await sendNotificationToMany({
-                    userIds: approverIds,
-                    title: 'New Policy Submitted for Review',
-                    body: `${user?.name || 'A user'} submitted "${document.document_name}" for review and approval.`,
-                    data: {
-                        type: 'policy_draft_submitted',
-                        document_id: document.id,
-                        clickAction: '/change-management',
-                    },
+            const assignedDepartmentAdmins = await getDepartmentAdminIdsForLibrary(document.library_id);
+            const departmentAdminIds = assignedDepartmentAdmins.filter(id => id !== userId);
+            if (assignedDepartmentAdmins.length > 0) {
+                if (departmentAdminIds.length > 0) await sendNotificationToMany({
+                    userIds: departmentAdminIds,
+                    title: 'Policy Review Required',
+                    body: `${user?.name || 'A user'} submitted "${document.document_name}" for Department admin review.`,
+                    data: { type: 'department_policy_review_requested', document_id: document.id, clickAction: '/change-management' },
                     clickAction: '/change-management',
                 });
+            } else {
+                const approvers = await rbacModel.getUsersWithPermission('documents', 'approval').catch(() => []);
+                const approverIds = approvers.filter(id => id !== userId);
+                if (approverIds.length > 0) {
+                    await sendNotificationToMany({
+                        userIds: approverIds,
+                        title: 'New Policy Submitted for Review',
+                        body: `${user?.name || 'A user'} submitted "${document.document_name}" for review and approval.`,
+                        data: { type: 'policy_draft_submitted', document_id: document.id, clickAction: '/change-management' },
+                        clickAction: '/change-management',
+                    });
+                }
             }
 
             if (userId) {
@@ -109,8 +161,12 @@ const getDocumentById = asyncHandler(async (req, res) => {
     if (!isSuperAdmin && user?.id) {
         const specificAccess = await documentModel.getPolicyUserAccess(id);
         const userGrant = specificAccess.find(a => a.user_id === user.id);
-        if (userGrant && userGrant.can_view === false) {
+        const hasDepartmentView = isDepartmentAdmin(user) && await hasDepartmentPermission(user.id, document.library_id, 'can_view');
+        if (userGrant && userGrant.can_view === false && !hasDepartmentView) {
             throw new AppError('You do not have permission to view this policy.', 403);
+        }
+        if (isDepartmentAdmin(user) && !await hasDepartmentPermission(user.id, document.library_id, 'can_view')) {
+            throw new AppError('You do not have access to this department.', 403);
         }
     }
 
@@ -129,7 +185,8 @@ const getAllDocuments = asyncHandler(async (req, res) => {
         const name = typeof r === 'string' ? r : r.role_name;
         return name?.toLowerCase() === 'super admin';
     });
-    const canApprove = isSuperAdmin || (user?.permissions || []).includes('documents:approval');
+    const canApprove = isSuperAdmin || (user?.permissionStrings || []).includes('documents:approval');
+    const departmentAdmin = isDepartmentAdmin(user);
 
     const { library_id, status, document_type, search, page = 1, limit = 50, scope, for_change_management } = req.query;
     const offset = (page - 1) * limit;
@@ -145,6 +202,7 @@ const getAllDocuments = asyncHandler(async (req, res) => {
         isSuperAdmin,
         canApprove,
         isChangeManagement,
+        isDepartmentAdmin: departmentAdmin,
         limit,
         offset,
     });
@@ -167,7 +225,8 @@ const getDocumentsByLibrary = asyncHandler(async (req, res) => {
         const name = typeof r === 'string' ? r : r.role_name;
         return name?.toLowerCase() === 'super admin';
     });
-    const canApprove = isSuperAdmin || (user?.permissions || []).includes('documents:approval');
+    const canApprove = isSuperAdmin || (user?.permissionStrings || []).includes('documents:approval');
+    const departmentAdmin = isDepartmentAdmin(user);
 
     const library = await libraryModel.findById(libraryId);
     if (!library) {
@@ -184,6 +243,7 @@ const getDocumentsByLibrary = asyncHandler(async (req, res) => {
         user_id: user?.id,
         isSuperAdmin,
         canApprove,
+        isDepartmentAdmin: departmentAdmin,
         limit,
         offset,
     });
@@ -206,7 +266,13 @@ const updateDocument = asyncHandler(async (req, res) => {
     if (!existing) {
         throw new AppError('Document not found.', 404);
     }
-
+    const isSuperAdmin = req.user?.isSuperAdmin || (req.user?.roles || []).some(r => (typeof r === 'string' ? r : r.role_name)?.toLowerCase() === 'super admin');
+    const policyAccess = await documentModel.getPolicyUserAccess(id);
+    const userGrant = policyAccess.find(a => a.user_id === userId);
+    const isAuthor = existing.created_by === userId || existing.requested_by === userId;
+    if (!isSuperAdmin && !isAuthor && !userGrant?.can_edit && !await hasDepartmentPermission(userId, existing.library_id, 'can_edit')) {
+        throw new AppError('You do not have permission to edit this policy.', 403);
+    }
     const updated = await documentModel.update(id, req.body, userId);
 
     await activityModel.logActivity({
@@ -230,6 +296,11 @@ const deleteDocument = asyncHandler(async (req, res) => {
     if (!existing) {
         throw new AppError('Document not found.', 404);
     }
+
+    const isSuperAdmin = req.user?.isSuperAdmin || (req.user?.roles || []).some(r => (typeof r === 'string' ? r : r.role_name)?.toLowerCase() === 'super admin');
+    const perDocAccess = await documentModel.getPolicyUserAccess(id);
+    const hasDelete = perDocAccess.some(a => a.user_id === userId && a.can_delete);
+    if (!isSuperAdmin && !hasDelete && !await hasDepartmentPermission(userId, existing.library_id, 'can_delete')) throw new AppError('You do not have permission to delete this policy.', 403);
 
     const deleted = await documentModel.softDelete(id, userId);
 
@@ -260,6 +331,9 @@ const moveDocument = asyncHandler(async (req, res) => {
     if (!targetLibrary) {
         throw new AppError('Target library does not exist.', 404);
     }
+    if (isDepartmentAdmin(req.user) && (!await hasDepartmentPermission(userId, document.library_id, 'can_edit') || !await hasDepartmentPermission(userId, target_library_id, 'can_edit'))) {
+        throw new AppError('You can only move policies between departments where you have edit access.', 403);
+    }
 
     const moved = await documentModel.move(id, target_library_id, userId);
 
@@ -284,7 +358,8 @@ const searchDocuments = asyncHandler(async (req, res) => {
         const name = typeof r === 'string' ? r : r.role_name;
         return name?.toLowerCase() === 'super admin';
     });
-    const canApprove = isSuperAdmin || (user?.permissions || []).includes('documents:approval');
+    const canApprove = isSuperAdmin || (user?.permissionStrings || []).includes('documents:approval');
+    const departmentAdmin = isDepartmentAdmin(user);
     const offset = (page - 1) * limit;
 
     const { documents, total } = await documentModel.findAll({
@@ -294,6 +369,7 @@ const searchDocuments = asyncHandler(async (req, res) => {
         user_id: user?.id,
         isSuperAdmin,
         canApprove,
+        isDepartmentAdmin: departmentAdmin,
         limit,
         offset,
     });
@@ -325,6 +401,9 @@ const getDocumentMetadata = asyncHandler(async (req, res) => {
     if (!isSuperAdmin && metadata.can_view === false) {
         throw new AppError('You do not have permission to view this policy.', 403);
     }
+    if (!isSuperAdmin && isDepartmentAdmin(user) && !await hasDepartmentPermission(user.id, metadata.library_id, 'can_view')) {
+        throw new AppError('You do not have access to this department.', 403);
+    }
 
     return sendSuccess(res, 'Document metadata retrieved successfully', metadata);
 });
@@ -336,22 +415,69 @@ const reviewDocument = asyncHandler(async (req, res) => {
         const name = typeof r === 'string' ? r : r.role_name;
         return name?.toLowerCase() === 'super admin';
     });
-    const canApprove = isSuperAdmin || (user?.permissions || []).includes('documents:approval');
-
-    if (!canApprove) {
-        throw new AppError('You do not have permission to approve or reject operational policies.', 403);
-    }
-
     const { id } = req.params;
-    const { action, rejection_reason, commit_message } = req.body; // 'approve' | 'reject'
+    const { action, rejection_reason, commit_message } = req.body;
 
-    if (!['approve', 'reject'].includes(action)) {
-        throw new AppError('Action must be "approve" or "reject".', 400);
+    if (!['approve', 'reject', 'department_approve'].includes(action)) {
+        throw new AppError('Action must be "approve", "department_approve", or "reject".', 400);
     }
 
     const document = await documentModel.findById(id);
     if (!document) throw new AppError('Document not found.', 404);
 
+    if (isDepartmentAdmin(user) && !isSuperAdmin) {
+        if (!await hasDepartmentPermission(user.id, document.library_id, 'can_edit')) {
+            throw new AppError('You need edit access to this department to review its policies.', 403);
+        }
+        if (!['department_approve', 'reject'].includes(action)) throw new AppError('Department admins must approve the policy before Super Admin review.', 403);
+        if (action === 'department_approve') {
+            await pool.query(`UPDATE document_management.documents SET department_approval_status='approved',
+                department_approved_by=$1, department_approved_at=NOW(), updated_at=NOW() WHERE id=$2`, [user.id, id]);
+            setImmediate(async () => {
+                try {
+                    const approvers = await rbacModel.getUsersWithPermission('documents', 'approval').catch(() => []);
+                    const approverIds = approvers.filter(approverId => approverId !== user.id);
+                    if (approverIds.length) {
+                        await sendNotificationToMany({
+                            userIds: approverIds,
+                            title: 'Policy Ready for Super Admin Review',
+                            body: `Department admin approved "${document.pending_document_name || document.document_name}". It is ready for final review.`,
+                            data: { type: 'policy_ready_for_super_admin_review', document_id: id, clickAction: '/change-management' },
+                            clickAction: '/change-management',
+                        });
+                    }
+                    const authorId = document.pending_revision_by || document.requested_by || document.created_by;
+                    if (authorId && authorId !== user.id) {
+                        await sendNotificationToSingle({
+                            userId: authorId,
+                            title: 'Department Review Complete',
+                            body: `Department admin approved "${document.pending_document_name || document.document_name}". It is now waiting for final review.`,
+                            data: { type: 'department_policy_review_approved', document_id: id, clickAction: '/change-management' },
+                            clickAction: '/change-management',
+                        });
+                    }
+                } catch (notificationError) {
+                    console.error('[Document] Failed to notify reviewers after department approval:', notificationError.message);
+                }
+            });
+            return sendSuccess(res, 'Department approval recorded. Policy is now ready for Super Admin review.', await documentModel.findById(id));
+        }
+        await pool.query(`UPDATE document_management.documents SET department_approval_status='rejected',
+            department_approved_by=NULL, department_approved_at=NULL, updated_at=NOW() WHERE id=$1`, [id]);
+    } else {
+        const canApprove = isSuperAdmin || (user?.permissions || []).some(p => `${p.module_name?.toLowerCase()}:${p.operation_name?.toLowerCase()}` === 'documents:approval') || (user?.permissionStrings || []).includes('documents:approval');
+        if (!canApprove) throw new AppError('You do not have permission to approve or reject operational policies.', 403);
+    }
+
+    const departmentAdmins = await pool.query(`WITH RECURSIVE ancestors AS (
+        SELECT id, parent_library_id FROM document_management.libraries WHERE id=$1
+        UNION ALL SELECT p.id, p.parent_library_id FROM document_management.libraries p JOIN ancestors a ON p.id=a.parent_library_id
+    ) SELECT COUNT(*)::int AS count FROM document_management.department_user_access dua
+        JOIN public.user_roles ur ON ur.user_id=dua.user_id JOIN public.roles r ON r.id=ur.role_id AND r.is_active=TRUE
+        JOIN ancestors a ON a.id=dua.library_id WHERE dua.can_edit=TRUE AND LOWER(r.role_name)='department admin'`, [document.library_id]);
+    if (action === 'approve' && departmentAdmins.rows[0].count > 0 && document.department_approval_status !== 'approved') {
+        throw new AppError('Department admin approval is required before Super Admin approval.', 409);
+    }
     let updatedDoc;
 
     // On approval: promote revision snapshot to active live version
@@ -479,6 +605,56 @@ const bulkUpdateUserPolicyAccess = asyncHandler(async (req, res) => {
     return sendSuccess(res, `Updated access for ${results.length} policies`, results);
 });
 
+const isDepartmentAdmin = (user) => (user?.roles || []).some(r => {
+    const name = typeof r === 'string' ? r : r.role_name;
+    return name?.trim().toLowerCase() === 'department admin';
+});
+
+const getDepartmentAccess = asyncHandler(async (req, res) => {
+    const { userId } = req.params;
+    const roleCheck = await pool.query(`SELECT 1 FROM public.user_roles ur JOIN public.roles r ON r.id=ur.role_id
+        WHERE ur.user_id=$1 AND r.is_active=TRUE AND LOWER(r.role_name)='department admin' LIMIT 1`, [userId]);
+    if (!roleCheck.rowCount) throw new AppError('Department access can only be assigned to a Department admin.', 400);
+    const result = await pool.query(`
+        SELECT l.id AS library_id, l.library_name, l.parent_library_id,
+               COALESCE(dua.can_view, FALSE) AS can_view,
+               COALESCE(dua.can_edit, FALSE) AS can_edit,
+               COALESCE(dua.can_delete, FALSE) AS can_delete
+        FROM document_management.libraries l
+        LEFT JOIN document_management.department_user_access dua
+          ON dua.library_id = l.id AND dua.user_id = $1
+        WHERE l.deleted_at IS NULL AND l.status = 'active'
+        ORDER BY l.display_order, l.library_name`, [userId]);
+    return sendSuccess(res, 'Department access retrieved', result.rows);
+});
+
+const saveDepartmentAccess = asyncHandler(async (req, res) => {
+    const { userId } = req.params;
+    if (!Array.isArray(req.body.departments)) throw new AppError('departments must be an array', 400);
+    const roleCheck = await pool.query(`SELECT 1 FROM public.user_roles ur JOIN public.roles r ON r.id=ur.role_id
+        WHERE ur.user_id=$1 AND r.is_active=TRUE AND LOWER(r.role_name)='department admin' LIMIT 1`, [userId]);
+    if (!roleCheck.rowCount) throw new AppError('Department access can only be assigned to a Department admin.', 400);
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        for (const d of req.body.departments) {
+            const canEdit = !!d.can_edit;
+            const canDelete = !!d.can_delete;
+            const canView = !!d.can_view || canEdit || canDelete;
+            await client.query(`INSERT INTO document_management.department_user_access
+                (user_id, library_id, can_view, can_edit, can_delete, granted_by, updated_at)
+                SELECT $1, l.id, $3, $4, $5, $6, NOW() FROM document_management.libraries l
+                WHERE l.id = $2 AND l.deleted_at IS NULL AND l.status = 'active'
+                ON CONFLICT (user_id, library_id) DO UPDATE SET can_view=EXCLUDED.can_view,
+                can_edit=EXCLUDED.can_edit, can_delete=EXCLUDED.can_delete, granted_by=EXCLUDED.granted_by, updated_at=NOW()`,
+            [userId, d.library_id, canView, canEdit, canDelete, req.user.id]);
+        }
+        await client.query('COMMIT');
+    } catch (e) { await client.query('ROLLBACK'); throw e; }
+    finally { client.release(); }
+    return sendSuccess(res, 'Department access saved', { count: req.body.departments.length });
+});
+
 // ── Version Control Controllers ──
 
 // POST /:id/create-revision — User clicks Configure on a live policy
@@ -502,7 +678,7 @@ const createRevision = asyncHandler(async (req, res) => {
         if (!isDocCreator) {
             const accessRows = await documentModel.getPolicyUserAccess(id);
             const userGrant = accessRows.find(a => a.user_id === userId);
-            if (!userGrant || !userGrant.can_edit) {
+            if ((!userGrant || !userGrant.can_edit) && !await hasDepartmentPermission(userId, document.library_id, 'can_edit')) {
                 throw new AppError('You do not have permission to edit or revise this policy.', 403);
             }
         }
@@ -557,7 +733,7 @@ const saveSectionEdits = asyncHandler(async (req, res) => {
         if (!isDocCreator) {
             const accessRows = await documentModel.getPolicyUserAccess(id);
             const userGrant = accessRows.find(a => a.user_id === userId);
-            if (!userGrant || !userGrant.can_edit) {
+            if ((!userGrant || !userGrant.can_edit) && !await hasDepartmentPermission(userId, document.library_id, 'can_edit')) {
                 throw new AppError('You do not have permission to edit this policy.', 403);
             }
         }
@@ -617,7 +793,7 @@ const submitRevisionForReview = asyncHandler(async (req, res) => {
         if (!isDocCreator) {
             const accessRows = await documentModel.getPolicyUserAccess(id);
             const userGrant = accessRows.find(a => a.user_id === userId);
-            if (!userGrant || !userGrant.can_edit) {
+            if ((!userGrant || !userGrant.can_edit) && !await hasDepartmentPermission(userId, document.library_id, 'can_edit')) {
                 throw new AppError('You do not have permission to submit revisions for this policy.', 403);
             }
         }
@@ -641,8 +817,38 @@ const submitRevisionForReview = asyncHandler(async (req, res) => {
 
     // Set revision_status to 'pending_review'
     await pool.query(
-        `UPDATE document_management.documents
+        `UPDATE document_management.documents AS d
          SET revision_status = 'pending_review',
+             department_approval_status = CASE WHEN EXISTS (
+                WITH RECURSIVE ancestors AS (
+                    SELECT id, parent_library_id FROM document_management.libraries WHERE id=d.library_id
+                    UNION ALL SELECT p.id, p.parent_library_id FROM document_management.libraries p JOIN ancestors a ON p.id=a.parent_library_id
+                )
+                SELECT 1 FROM document_management.department_user_access dua
+                JOIN public.user_roles ur ON ur.user_id=dua.user_id
+                JOIN public.roles r ON r.id=ur.role_id AND r.is_active=TRUE
+                JOIN ancestors a ON a.id=dua.library_id WHERE dua.can_edit=TRUE AND LOWER(r.role_name)='department admin'
+             ) THEN 'pending' ELSE department_approval_status END,
+             department_approved_by = CASE WHEN EXISTS (
+                WITH RECURSIVE ancestors AS (
+                    SELECT id, parent_library_id FROM document_management.libraries WHERE id=d.library_id
+                    UNION ALL SELECT p.id, p.parent_library_id FROM document_management.libraries p JOIN ancestors a ON p.id=a.parent_library_id
+                )
+                SELECT 1 FROM document_management.department_user_access dua
+                JOIN public.user_roles ur ON ur.user_id=dua.user_id
+                JOIN public.roles r ON r.id=ur.role_id AND r.is_active=TRUE
+                JOIN ancestors a ON a.id=dua.library_id WHERE dua.can_edit=TRUE AND LOWER(r.role_name)='department admin'
+             ) THEN NULL ELSE department_approved_by END,
+             department_approved_at = CASE WHEN EXISTS (
+                WITH RECURSIVE ancestors AS (
+                    SELECT id, parent_library_id FROM document_management.libraries WHERE id=d.library_id
+                    UNION ALL SELECT p.id, p.parent_library_id FROM document_management.libraries p JOIN ancestors a ON p.id=a.parent_library_id
+                )
+                SELECT 1 FROM document_management.department_user_access dua
+                JOIN public.user_roles ur ON ur.user_id=dua.user_id
+                JOIN public.roles r ON r.id=ur.role_id AND r.is_active=TRUE
+                JOIN ancestors a ON a.id=dua.library_id WHERE dua.can_edit=TRUE AND LOWER(r.role_name)='department admin'
+             ) THEN NULL ELSE department_approved_at END,
              pending_document_name = COALESCE($2, pending_document_name),
              updated_at = NOW()
          WHERE id = $1`,
@@ -659,24 +865,31 @@ const submitRevisionForReview = asyncHandler(async (req, res) => {
         actor_id: userId,
     });
 
-    // Notify Approvers (Super Admins + users with approval permission in matrix) & Confirm to Submitter
+    // Route revised policies to Department admins first when the department has an assigned reviewer.
     setImmediate(async () => {
         try {
-            const approvers = await rbacModel.getUsersWithPermission('documents', 'approval').catch(() => []);
-            const approverIds = approvers.filter(saId => saId !== userId);
-
-            if (approverIds.length > 0) {
-                await sendNotificationToMany({
-                    userIds: approverIds,
-                    title: 'Policy Revision Submitted for Review',
-                    body: `${user?.name || 'A user'} submitted revision v${document.pending_revision_version || 'new'} of "${pendingDocumentName || document.pending_document_name || document.document_name}" for approval review.`,
-                    data: {
-                        type: 'policy_revision_submitted',
-                        document_id: document.id,
-                        clickAction: '/change-management',
-                    },
+            const assignedDepartmentAdmins = await getDepartmentAdminIdsForLibrary(document.library_id);
+            const departmentAdminIds = assignedDepartmentAdmins.filter(id => id !== userId);
+            if (assignedDepartmentAdmins.length > 0) {
+                if (departmentAdminIds.length > 0) await sendNotificationToMany({
+                    userIds: departmentAdminIds,
+                    title: 'Policy Revision Review Required',
+                    body: `${user?.name || 'A user'} submitted revision v${document.pending_revision_version || 'new'} of "${pendingDocumentName || document.pending_document_name || document.document_name}" for Department admin review.`,
+                    data: { type: 'department_policy_revision_review_requested', document_id: document.id, clickAction: '/change-management' },
                     clickAction: '/change-management',
                 });
+            } else {
+                const approvers = await rbacModel.getUsersWithPermission('documents', 'approval').catch(() => []);
+                const approverIds = approvers.filter(saId => saId !== userId);
+                if (approverIds.length > 0) {
+                    await sendNotificationToMany({
+                        userIds: approverIds,
+                        title: 'Policy Revision Submitted for Review',
+                        body: `${user?.name || 'A user'} submitted revision v${document.pending_revision_version || 'new'} of "${pendingDocumentName || document.pending_document_name || document.document_name}" for approval review.`,
+                        data: { type: 'policy_revision_submitted', document_id: document.id, clickAction: '/change-management' },
+                        clickAction: '/change-management',
+                    });
+                }
             }
 
             if (userId) {
@@ -1008,6 +1221,8 @@ module.exports = {
     updatePolicyAccess,
     getUserPolicyAccessList,
     bulkUpdateUserPolicyAccess,
+    getDepartmentAccess,
+    saveDepartmentAccess,
     createRevision,
     submitRevisionForReview,
     discardRevision,

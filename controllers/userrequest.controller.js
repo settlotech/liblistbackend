@@ -48,6 +48,9 @@ const requestOtp = async (req, res, next) => {
             user_name: user_name?.trim() || null,
             otp,
         });
+        if (request.alreadyPending) {
+            return next(new AppError('A verified signup request with this email is already awaiting admin review.', 409));
+        }
 
         // Send OTP email
         const html = emailTemplates.signupOtpTemplate(otp, user_name?.trim() || email);
@@ -127,6 +130,11 @@ const resendOtp = async (req, res, next) => {
 
         const email = user_email.toLowerCase().trim();
 
+        const existingUser = await userModel.findByEmail(email);
+        if (existingUser) {
+            return next(new AppError('This email is already registered. Please log in.', 409));
+        }
+
         // Check no already-verified pending request
         const existingVerified = await userRequestModel.findVerifiedPendingRequest(email);
         if (existingVerified) {
@@ -142,6 +150,9 @@ const resendOtp = async (req, res, next) => {
             user_name: user_name?.trim() || null,
             otp,
         });
+        if (request.alreadyPending) {
+            return next(new AppError('Your email is already verified and under admin review.', 409));
+        }
 
         const html = emailTemplates.signupOtpTemplate(otp, user_name?.trim() || email);
         await emailService.sendEmail(email, 'New Verification Code – LibList Signup', html);
@@ -197,12 +208,18 @@ const reviewRequest = async (req, res, next) => {
         if (request.status !== 'pending') {
             return next(new AppError(`Request has already been ${request.status}.`, 409));
         }
+        if (request.is_used) {
+            return next(new AppError('This request is no longer active. Refresh the request list and review the current request.', 409));
+        }
 
         const updated = await userRequestModel.updateRequestStatus(id, {
             status,
             reviewed_by,
             rejection_reason: status === 'rejected' ? rejection_reason : null,
         });
+        if (!updated) {
+            return next(new AppError('This request was already reviewed. Refresh the request list.', 409));
+        }
 
         // If approved, notify the user with credentials and portal instructions
         if (status === 'approved') {

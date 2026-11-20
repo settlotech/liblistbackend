@@ -97,11 +97,20 @@ const findById = async (id) => {
     const text = `
     SELECT 
       d.*,
+      EXISTS (WITH RECURSIVE ancestors AS (
+          SELECT id, parent_library_id FROM document_management.libraries WHERE id=d.library_id
+          UNION ALL SELECT p.id, p.parent_library_id FROM document_management.libraries p JOIN ancestors a ON p.id=a.parent_library_id
+      ) SELECT 1 FROM document_management.department_user_access dua
+          JOIN ancestors a ON a.id=dua.library_id
+          JOIN public.user_roles ur ON ur.user_id=dua.user_id
+          JOIN public.roles r ON r.id=ur.role_id AND r.is_active=TRUE
+          WHERE dua.can_edit=TRUE AND LOWER(r.role_name)='department admin') AS has_department_admin,
       COALESCE(d.root_document_name, d.document_name) AS root_policy_name,
       l.library_name,
       u_req.name AS requested_by_name,
       u_req.email AS requested_by_email,
       u_app.name AS approved_by_name,
+      u_dept_app.name AS department_approved_by_name,
       u_rev.name AS pending_revision_by_name,
       v.version_number AS current_version_number,
       v.commit_hash AS current_commit_hash,
@@ -111,6 +120,7 @@ const findById = async (id) => {
     JOIN document_management.libraries l ON d.library_id = l.id
     LEFT JOIN public.users u_req ON d.requested_by = u_req.id OR d.created_by = u_req.id
     LEFT JOIN public.users u_app ON d.approved_by = u_app.id
+    LEFT JOIN public.users u_dept_app ON d.department_approved_by = u_dept_app.id
     LEFT JOIN public.users u_rev ON d.pending_revision_by = u_rev.id
     LEFT JOIN document_management.document_versions v ON COALESCE(d.live_version_id, d.current_version_id) = v.id
     LEFT JOIN document_management.document_versions pv ON d.pending_revision_id = pv.id
@@ -129,6 +139,7 @@ const findAll = async ({
     isSuperAdmin = false,
     canApprove = false,
     isChangeManagement = false,
+    isDepartmentAdmin = false,
     limit = 50,
     offset = 0,
 } = {}) => {
@@ -138,7 +149,7 @@ const findAll = async ({
     // ── Policy Access Control: Can View Check ──
     // If a policy has can_view = FALSE explicitly configured for this user in policy_user_access,
     // they MUST NOT see or access this policy in the Master Library tree, search, or document lists.
-    if (!isSuperAdmin && user_id) {
+    if (!isSuperAdmin && user_id && !isDepartmentAdmin) {
         values.push(user_id);
         const puaIdx = values.length;
         conditions.push(`NOT EXISTS (
@@ -146,13 +157,29 @@ const findAll = async ({
             WHERE pua.document_id = d.id AND pua.user_id = $${puaIdx} AND pua.can_view = FALSE
         )`);
     }
+    if (isDepartmentAdmin && user_id) {
+        values.push(user_id);
+        conditions.push(`EXISTS (WITH RECURSIVE ancestors AS (
+            SELECT id, parent_library_id, 0 AS depth FROM document_management.libraries WHERE id=d.library_id
+            UNION ALL SELECT p.id, p.parent_library_id, a.depth+1 FROM document_management.libraries p JOIN ancestors a ON p.id=a.parent_library_id
+        ) SELECT 1 FROM (SELECT dua.can_view FROM ancestors a JOIN document_management.department_user_access dua ON dua.library_id=a.id
+            WHERE dua.user_id = $${values.length} ORDER BY a.depth LIMIT 1) effective WHERE effective.can_view=TRUE)`);
+    }
 
     if (isChangeManagement) {
         // Change Management Scope: Except Super Admin, users only see policies they authored or are revising
         if (!isSuperAdmin && user_id) {
             values.push(user_id);
             const uIdx = values.length;
-            conditions.push(`(d.created_by = $${uIdx} OR d.requested_by = $${uIdx} OR d.pending_revision_by = $${uIdx})`);
+            if (isDepartmentAdmin) {
+                conditions.push(`(d.created_by = $${uIdx} OR d.requested_by = $${uIdx} OR d.pending_revision_by = $${uIdx} OR EXISTS (
+                    WITH RECURSIVE ancestors AS (
+                        SELECT id, parent_library_id, 0 AS depth FROM document_management.libraries WHERE id=d.library_id
+                        UNION ALL SELECT p.id, p.parent_library_id, a.depth+1 FROM document_management.libraries p JOIN ancestors a ON p.id=a.parent_library_id
+                    ) SELECT 1 FROM (SELECT dua.can_edit FROM ancestors a JOIN document_management.department_user_access dua ON dua.library_id=a.id
+                        WHERE dua.user_id=$${uIdx} ORDER BY a.depth LIMIT 1) effective WHERE effective.can_edit=TRUE
+                ))`);
+            } else conditions.push(`(d.created_by = $${uIdx} OR d.requested_by = $${uIdx} OR d.pending_revision_by = $${uIdx})`);
         }
     } else {
         // General / Master Library Tree Scope:
@@ -204,11 +231,20 @@ const findAll = async ({
     const dataText = `
     SELECT 
       d.*,
+      EXISTS (WITH RECURSIVE ancestors AS (
+          SELECT id, parent_library_id FROM document_management.libraries WHERE id=d.library_id
+          UNION ALL SELECT p.id, p.parent_library_id FROM document_management.libraries p JOIN ancestors a ON p.id=a.parent_library_id
+      ) SELECT 1 FROM document_management.department_user_access dua
+          JOIN ancestors a ON a.id=dua.library_id
+          JOIN public.user_roles ur ON ur.user_id=dua.user_id
+          JOIN public.roles r ON r.id=ur.role_id AND r.is_active=TRUE
+          WHERE dua.can_edit=TRUE AND LOWER(r.role_name)='department admin') AS has_department_admin,
       COALESCE(d.root_document_name, d.document_name) AS root_policy_name,
       l.library_name,
       u_req.name AS requested_by_name,
       u_req.email AS requested_by_email,
       u_app.name AS approved_by_name,
+      u_dept_app.name AS department_approved_by_name,
       v.version_number AS current_version_number,
       v.commit_hash AS current_commit_hash,
       pv.version_number AS pending_version_number,
@@ -225,6 +261,7 @@ const findAll = async ({
     JOIN document_management.libraries l ON d.library_id = l.id
     LEFT JOIN public.users u_req ON d.requested_by = u_req.id OR d.created_by = u_req.id
     LEFT JOIN public.users u_app ON d.approved_by = u_app.id
+    LEFT JOIN public.users u_dept_app ON d.department_approved_by = u_dept_app.id
     LEFT JOIN document_management.document_versions v ON COALESCE(d.live_version_id, d.current_version_id) = v.id
     LEFT JOIN document_management.document_versions pv ON d.pending_revision_id = pv.id
     LEFT JOIN document_management.document_versions lv ON d.live_version_id = lv.id
@@ -324,7 +361,20 @@ const getCompleteMetadata = async (id, userId = null, isSuperAdmin = false) => {
   `;
 
     // Query policy_user_access for this specific user
-    let userAccessQuery = 'SELECT can_view, can_edit, can_delete FROM document_management.policy_user_access WHERE document_id = $1 AND user_id = $2;';
+    let userAccessQuery = `SELECT COALESCE(dua.can_view, pua.can_view, TRUE) AS can_view,
+        COALESCE(dua.can_edit, pua.can_edit, FALSE) AS can_edit,
+        COALESCE(dua.can_delete, pua.can_delete, FALSE) AS can_delete
+        FROM document_management.documents d
+        LEFT JOIN document_management.policy_user_access pua ON pua.document_id=d.id AND pua.user_id=$2
+        LEFT JOIN LATERAL (
+            WITH RECURSIVE ancestors AS (
+                SELECT id, parent_library_id, 0 AS depth FROM document_management.libraries WHERE id=d.library_id
+                UNION ALL SELECT p.id, p.parent_library_id, a.depth+1 FROM document_management.libraries p JOIN ancestors a ON p.id=a.parent_library_id
+            ) SELECT dua.can_view, dua.can_edit, dua.can_delete FROM ancestors a
+              JOIN document_management.department_user_access dua ON dua.library_id=a.id
+              WHERE dua.user_id=$2 ORDER BY a.depth LIMIT 1
+        ) dua ON TRUE
+        WHERE d.id=$1;`;
     let pinnedQuery = 'SELECT 1 FROM document_management.user_pinned_policies WHERE document_id = $1 AND user_id = $2;';
 
     const [sectionsRes, assetsRes, versionsRes, accessRes, pinnedRes] = await Promise.all([
@@ -438,14 +488,22 @@ const getUserPolicyAccess = async (userId) => {
             d.document_type,
             d.status,
             l.library_name,
-            COALESCE(pua.can_view, TRUE)   AS can_view,
-            COALESCE(pua.can_edit, FALSE)  AS can_edit,
-            COALESCE(pua.can_delete, FALSE) AS can_delete,
+            COALESCE(dua.can_view, pua.can_view, TRUE)   AS can_view,
+            COALESCE(dua.can_edit, pua.can_edit, FALSE)  AS can_edit,
+            COALESCE(dua.can_delete, pua.can_delete, FALSE) AS can_delete,
             (pua.id IS NOT NULL)           AS has_explicit_grant
         FROM document_management.documents d
         LEFT JOIN document_management.libraries l ON d.library_id = l.id AND l.deleted_at IS NULL
         LEFT JOIN document_management.policy_user_access pua
             ON pua.document_id = d.id AND pua.user_id = $1
+        LEFT JOIN LATERAL (
+            WITH RECURSIVE ancestors AS (
+                SELECT id, parent_library_id, 0 AS depth FROM document_management.libraries WHERE id=d.library_id
+                UNION ALL SELECT parent.id, parent.parent_library_id, a.depth+1 FROM document_management.libraries parent JOIN ancestors a ON parent.id=a.parent_library_id
+            ) SELECT dua.can_view, dua.can_edit, dua.can_delete FROM ancestors a
+              JOIN document_management.department_user_access dua ON dua.library_id=a.id
+              WHERE dua.user_id=$1 ORDER BY a.depth LIMIT 1
+        ) dua ON TRUE
         WHERE d.deleted_at IS NULL AND d.status != 'suspended'
         ORDER BY l.library_name ASC, d.document_name ASC;
     `;

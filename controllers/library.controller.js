@@ -119,7 +119,7 @@ const deleteLibrary = asyncHandler(async (req, res) => {
 });
 
 const getLibraryHierarchy = asyncHandler(async (req, res) => {
-    const { id } = req.params;
+    const id = req.params.id || req.query.id || null;
 
     if (id) {
         const root = await libraryModel.findById(id);
@@ -128,7 +128,13 @@ const getLibraryHierarchy = asyncHandler(async (req, res) => {
         }
     }
 
-    const tree = await libraryModel.getHierarchy(id || null);
+    const isDepartmentAdmin = (req.user?.roles || []).some(role => {
+        const name = typeof role === 'string' ? role : role.role_name;
+        return name?.trim().toLowerCase() === 'department admin';
+    });
+    const tree = isDepartmentAdmin
+        ? await libraryModel.getDepartmentHierarchy(req.user.id, id)
+        : await libraryModel.getHierarchy(id);
     return sendSuccess(res, 'Library hierarchy retrieved successfully', tree);
 });
 

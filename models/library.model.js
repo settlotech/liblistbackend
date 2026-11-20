@@ -174,6 +174,47 @@ const getHierarchy = async (rootLibraryId = null) => {
     return res.rows;
 };
 
+const getDepartmentHierarchy = async (userId, rootLibraryId = null) => {
+    const text = `
+    WITH RECURSIVE library_tree AS (
+      SELECT id, parent_library_id, library_name, description, display_order, status, created_at, updated_at,
+             pending_removal, removal_reason, 0 AS depth, ARRAY[id] AS path
+      FROM document_management.libraries
+      WHERE (($2::uuid IS NULL AND parent_library_id IS NULL) OR id = $2)
+        AND deleted_at IS NULL AND status = 'active'
+      UNION ALL
+      SELECT l.id, l.parent_library_id, l.library_name, l.description, l.display_order, l.status, l.created_at, l.updated_at,
+             l.pending_removal, l.removal_reason, parent.depth + 1, parent.path || l.id
+      FROM document_management.libraries l
+      JOIN library_tree parent ON l.parent_library_id = parent.id
+      WHERE l.deleted_at IS NULL AND l.status = 'active' AND NOT (l.id = ANY(parent.path))
+    ), visible_tree AS (
+      SELECT node.*
+      FROM library_tree node
+      CROSS JOIN LATERAL (
+        WITH RECURSIVE ancestors AS (
+          SELECT id, parent_library_id, 0 AS depth
+          FROM document_management.libraries WHERE id = node.id
+          UNION ALL
+          SELECT parent.id, parent.parent_library_id, child.depth + 1
+          FROM document_management.libraries parent
+          JOIN ancestors child ON parent.id = child.parent_library_id
+        )
+        SELECT dua.can_view
+        FROM ancestors a
+        JOIN document_management.department_user_access dua ON dua.library_id = a.id
+        WHERE dua.user_id = $1
+        ORDER BY a.depth
+        LIMIT 1
+      ) effective_access
+      WHERE effective_access.can_view = TRUE
+    )
+    SELECT * FROM visible_tree ORDER BY depth ASC, display_order ASC, library_name ASC;
+    `;
+    const result = await query(text, [userId, rootLibraryId]);
+    return result.rows;
+};
+
 const isDescendant = async (libraryId, targetParentId) => {
     if (!targetParentId) return false;
     if (libraryId === targetParentId) return true;
@@ -268,6 +309,7 @@ module.exports = {
     update,
     softDelete,
     getHierarchy,
+    getDepartmentHierarchy,
     isDescendant,
     move,
     requestRemoval,

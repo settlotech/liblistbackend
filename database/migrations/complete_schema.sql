@@ -312,6 +312,10 @@ CREATE TABLE IF NOT EXISTS document_management.documents (
     approved_by              UUID         NULL REFERENCES public.users(id),
     approved_at              TIMESTAMPTZ  NULL,
     rejection_reason         TEXT         NULL,
+    department_approval_status VARCHAR(30) NOT NULL DEFAULT 'not_required',
+    department_approved_by UUID NULL REFERENCES public.users(id),
+    department_approved_at TIMESTAMPTZ NULL,
+    approval_checklist JSONB NOT NULL DEFAULT '{}'::jsonb,
     -- Removal workflow (migration 004)
     pending_removal          BOOLEAN      NOT NULL DEFAULT FALSE,
     removal_requested_by     UUID         REFERENCES public.users(id),
@@ -335,6 +339,28 @@ ALTER TABLE document_management.documents
     ADD COLUMN IF NOT EXISTS pending_document_name VARCHAR(500);
 ALTER TABLE document_management.documents
     ADD COLUMN IF NOT EXISTS root_document_name VARCHAR(500);
+ALTER TABLE document_management.documents ADD COLUMN IF NOT EXISTS department_approval_status VARCHAR(30) NOT NULL DEFAULT 'not_required';
+ALTER TABLE document_management.documents ADD COLUMN IF NOT EXISTS department_approved_by UUID NULL REFERENCES public.users(id);
+ALTER TABLE document_management.documents ADD COLUMN IF NOT EXISTS department_approved_at TIMESTAMPTZ NULL;
+ALTER TABLE document_management.documents ADD COLUMN IF NOT EXISTS approval_checklist JSONB NOT NULL DEFAULT '{}'::jsonb;
+
+CREATE TABLE IF NOT EXISTS document_management.department_user_access (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
+    library_id UUID NOT NULL REFERENCES document_management.libraries(id) ON DELETE CASCADE,
+    can_view BOOLEAN NOT NULL DEFAULT TRUE,
+    can_edit BOOLEAN NOT NULL DEFAULT FALSE,
+    can_delete BOOLEAN NOT NULL DEFAULT FALSE,
+    granted_by UUID NULL REFERENCES public.users(id) ON DELETE SET NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_department_user_access UNIQUE (user_id, library_id)
+);
+CREATE INDEX IF NOT EXISTS idx_department_user_access_user ON document_management.department_user_access(user_id);
+
+INSERT INTO public.roles (role_name, description, is_active)
+VALUES ('Department admin', 'Department-scoped policy access and first-level policy review', TRUE)
+ON CONFLICT (role_name) DO UPDATE SET is_active = TRUE;
 
 CREATE INDEX IF NOT EXISTS idx_documents_library_created ON document_management.documents (library_id, created_at DESC) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_documents_status          ON document_management.documents (status)                       WHERE deleted_at IS NULL;
@@ -740,7 +766,8 @@ ON CONFLICT (module_name) DO UPDATE
 INSERT INTO public.roles (role_name, description, is_active) VALUES
     ('Super Admin', 'Full unrestricted access to all modules and operations', TRUE),
     ('Admin',       'Administrator access with permission to manage users and roles', TRUE),
-    ('User',        'Standard user with basic access', TRUE)
+    ('User',        'Standard user with basic access', TRUE),
+    ('Department admin', 'Department-scoped policy access and first-level policy review', TRUE)
 ON CONFLICT (role_name) DO NOTHING;
 
 -- ── Super Admin -> all permissions ───────────────────────────────────────────

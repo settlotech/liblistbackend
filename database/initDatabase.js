@@ -74,6 +74,8 @@ const seedSuperAdmin = async () => {
 const initializeDatabase = async () => {
     try {
         console.log('Initializing database...');
+        const departmentWorkflowSql = fs.readFileSync(path.join(__dirname, 'migrations', '009_department_admin_workflow.sql'), 'utf8');
+        const signupRequestDeduplicationSql = fs.readFileSync(path.join(__dirname, 'migrations', '010_signup_request_deduplication.sql'), 'utf8');
 
         // Skip heavy DDL when schema already exists (on Vercel or when RUN_DB_INIT_ON_STARTUP=false)
         const skipHeavyInit =
@@ -86,6 +88,8 @@ const initializeDatabase = async () => {
                             to_regclass('document_management.documents') IS NOT NULL AS dms_ready`
                 );
                 if (checkRes.rows[0]?.users_ready && checkRes.rows[0]?.dms_ready) {
+                    await pool.query(departmentWorkflowSql);
+                    await pool.query(signupRequestDeduplicationSql);
                     console.log('Database schema already initialized.');
                     return;
                 }
@@ -99,6 +103,8 @@ const initializeDatabase = async () => {
             throw new Error(`Canonical database setup file not found: ${completeSqlPath}`);
         }
         await pool.query(fs.readFileSync(completeSqlPath, 'utf8'));
+        await pool.query(departmentWorkflowSql);
+        await pool.query(signupRequestDeduplicationSql);
         console.log('complete_schema.sql applied.');
 
         // ── 2. Seed Super Admin user ──────────────────────────────────────────

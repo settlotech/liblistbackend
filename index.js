@@ -3,6 +3,7 @@ const cors = require('cors');
 const helmet = require('helmet');
 const compression = require('compression');
 const cookieParser = require('cookie-parser');
+const morgan = require('morgan');
 require('dotenv').config();
 
 const app = express();
@@ -50,7 +51,7 @@ app.use(express.urlencoded({
 
 // Compression
 app.use(compression());
-
+app.use(morgan())
 // Cookie Parser
 app.use(cookieParser());
 

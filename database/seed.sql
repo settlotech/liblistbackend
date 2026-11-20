@@ -31,7 +31,8 @@ INSERT INTO roles (role_name, description, is_active)
 VALUES
     ('Super Admin', 'Full unrestricted access to all modules and operations', TRUE),
     ('Admin', 'Administrator access with permission to manage users and roles', TRUE),
-    ('User', 'Standard user with basic access', TRUE)
+    ('User', 'Standard user with basic access', TRUE),
+    ('Department admin', 'Department-scoped policy access and first-level policy review', TRUE)
 ON CONFLICT (role_name) DO NOTHING;
 
 
